@@ -11,6 +11,10 @@ First public release. Replace "unreleased" with the release date when tagging.
 
 ### Added
 
+- **Desktop programs for Windows and macOS (Apple Silicon)**, plus Linux: one file to download and double-click, no Python or
+  Docker. It listens on this computer only, opens the browser, keeps the data in `~/.foliolib`, and creates the account in the
+  page on the first launch (only from `localhost`, only while no account exists). Built by a GitHub Actions workflow on each
+  `v*` tag. The programs are not code-signed: `docs/desktop-installation.md` explains the warning.
 - **Import** of DEGIRO exports (Transactions, Account, Portfolio) and Fortuneo exports (operations history, cash account) by
   drag and drop, in their French-language form. Records are de-duplicated by a SHA-256 of their content, so overlapping
   exports never count anything twice. Raw files are kept, so a parser fix re-reads everything without a new upload.

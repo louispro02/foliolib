@@ -7,12 +7,15 @@ import hmac
 import json
 import os
 import secrets
+import threading
 import time
 
 import store
+from i18n import Msg
 
 PATH = store.DATA / "auth.json"
 SESSION_SECONDS = 14 * 24 * 3600
+_setup_lock = threading.Lock()
 _fails = []          # timestamps of recent failures (global: a single user, a single door)
 MAX_FAILS, WINDOW = 5, 600
 
@@ -49,6 +52,19 @@ def set_password(user, password):
     with os.fdopen(fd, "w") as f:
         json.dump(conf, f)
     os.replace(tmp, PATH)
+
+
+def web_setup(user, password, confirm):
+    """First launch of the desktop application: create the account from the browser. Only valid while no account exists."""
+    user = user.strip()
+    if not user or len(password) < 12:
+        raise Msg("Empty username or password too short (12 characters minimum): nothing was saved.")
+    if password != confirm:
+        raise Msg("The two passwords differ: nothing was saved.")
+    with _setup_lock:                                   # two requests at once must not both create the account
+        if configured():
+            raise Msg("An account already exists.")
+        set_password(user, password)
 
 
 def cli_passwd():

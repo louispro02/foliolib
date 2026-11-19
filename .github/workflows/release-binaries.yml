@@ -1,0 +1,91 @@
+name: Release binaries
+
+# Builds one program per platform (no Python or Docker needed to run them) and attaches them to the GitHub release.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: windows-latest, name: windows-x86_64, sep: ";", exe: foliolib.exe, asset: foliolib-windows-x86_64.exe}
+          - {os: macos-latest, name: macos-arm64, sep: ":", exe: foliolib, asset: foliolib-macos-arm64.zip}
+          - {os: ubuntu-latest, name: linux-x86_64, sep: ":", exe: foliolib, asset: foliolib-linux-x86_64.tar.gz}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      # PyInstaller is only needed to build: the application itself has no dependency.
+      - name: Install PyInstaller
+        run: pip install pyinstaller==6.22.3
+      - name: Build
+        env:
+          PYTHONPATH: app      # --collect-submodules imports the packages: they must be importable (--paths alone is not enough)
+        run: >
+          pyinstaller --onefile --name foliolib --paths app
+          --add-data "app/static${{ matrix.sep }}static"
+          --collect-submodules i18n --collect-submodules parsers
+          desktop_entrypoint.py
+      - name: Smoke test (the program starts and answers)
+        shell: python
+        run: |
+          import os, subprocess, sys, tempfile, time, urllib.request
+          env = {**os.environ, "FOLIOLIB_DATA": tempfile.mkdtemp(), "FOLIOLIB_PORT": "18080"}
+          proc = subprocess.Popen([os.path.join("dist", "${{ matrix.exe }}")], env=env)
+          try:
+              for _ in range(60):
+                  try:
+                      assert urllib.request.urlopen("http://127.0.0.1:18080/healthz", timeout=2).status == 200
+                      page = urllib.request.urlopen("http://127.0.0.1:18080/login", timeout=2).read().decode()
+                      assert "/setup" in page, "the first-launch form is missing"   # no account yet: the page offers to create one
+                      assert urllib.request.urlopen("http://127.0.0.1:18080/static/login.css", timeout=2).status == 200
+                      assert "Créez" in urllib.request.urlopen("http://127.0.0.1:18080/login?lang=fr", timeout=2).read().decode()   # language files are bundled
+                      break
+                  except OSError:
+                      time.sleep(1)
+              else:
+                  sys.exit("the program did not answer")
+          finally:
+              proc.kill()
+      - name: Package
+        shell: bash
+        run: |
+          case "${{ matrix.name }}" in
+            windows-*) mv dist/foliolib.exe "dist/${{ matrix.asset }}" ;;
+            macos-*)   (cd dist && zip -q "${{ matrix.asset }}" foliolib) ;;
+            linux-*)   tar -C dist -czf "dist/${{ matrix.asset }}" foliolib ;;
+          esac
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.name }}
+          path: dist/${{ matrix.asset }}
+
+  release:
+    name: Attach to the release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: assets
+          merge-multiple: true
+      - name: Create the release (or complete it) and upload the programs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1 || gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes
+          gh release upload "$TAG" assets/* --repo "$GITHUB_REPOSITORY" --clobber

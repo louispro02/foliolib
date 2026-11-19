@@ -642,7 +642,7 @@ class Docs(unittest.TestCase):
             self.assertIn(anchor, headings, f"link to a missing section: {anchor}")
 
     def test_documented_environment_variables_are_the_real_ones(self):
-        source = self.read("app/store.py") + self.read("app/main.py")
+        source = self.read("app/store.py") + self.read("app/main.py") + self.read("desktop_entrypoint.py")
         documented = set(re.findall(r"`(FOLIOLIB_[A-Z]+)`", self.read("README.md")))
         self.assertEqual(documented, set(re.findall(r"FOLIOLIB_[A-Z]+", source)))
 
@@ -768,6 +768,93 @@ class Shutdown(unittest.TestCase):
             if proc.poll() is None:
                 proc.kill()
             proc.stdout.close()
+
+
+class DesktopSetup(unittest.TestCase):
+    """The desktop executable creates the account in the browser, on the first launch only, and only from this computer."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.dir = Path(tempfile.mkdtemp(prefix="foliolib-desktop-", dir=TMP))
+        cls.saved = (auth.PATH, os.environ.get("FOLIOLIB_DESKTOP"))
+        auth.PATH = cls.dir / "auth.json"
+        os.environ["FOLIOLIB_DESKTOP"] = "1"
+        cls.srv = ThreadingHTTPServer(("127.0.0.1", 0), main.Handler)
+        cls.port = cls.srv.server_address[1]
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+        auth.PATH = cls.saved[0]
+        if cls.saved[1] is None:
+            os.environ.pop("FOLIOLIB_DESKTOP", None)
+        else:
+            os.environ["FOLIOLIB_DESKTOP"] = cls.saved[1]
+
+    def setUp(self):
+        auth.PATH.unlink(missing_ok=True)
+        auth._fails.clear()
+
+    def post(self, form, host=None, origin=True):
+        host = host or f"localhost:{self.port}"
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        headers = {"Content-Type": "application/x-www-form-urlencoded", "Host": host}
+        if origin:
+            headers["Origin"] = f"http://{host}"
+        c.request("POST", "/setup", body=urllib.parse.urlencode(form), headers=headers)
+        r = c.getresponse()
+        return r.status, dict(r.getheaders()), r.read()
+
+    def get(self, path, host=None, headers=None):
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        c.request("GET", path, headers={"Host": host or f"localhost:{self.port}", **(headers or {})})
+        r = c.getresponse()
+        return r.status, dict(r.getheaders()), r.read()
+
+    def test_the_first_launch_offers_to_create_the_account_in_both_languages(self):
+        st, _, body = self.get("/login")
+        self.assertIn(b'action="/setup"', body)
+        self.assertIn(b"Create your account", body)
+        self.assertIn("Créez votre compte".encode(), self.get("/login", headers={"Accept-Language": "fr"})[2])
+
+    def test_creating_the_account_signs_in_and_closes_the_door(self):
+        st, hd, _ = self.post({"user": "me", "password": "a-long-password", "confirm": "a-long-password"})
+        self.assertEqual(st, 303)
+        self.assertTrue(auth.check("me", "a-long-password"))
+        self.assertNotIn("Secure", hd["Set-Cookie"])                    # Safari drops a Secure cookie on http://localhost
+        self.assertEqual(self.get("/api/data", headers={"Cookie": hd["Set-Cookie"].split(";")[0]})[0], 200)
+        self.assertIn(b'action="/login"', self.get("/login")[2])        # from now on: the normal sign-in page
+        self.assertEqual(self.post({"user": "x", "password": "another-long-one", "confirm": "another-long-one"})[0], 403)
+        self.assertFalse(auth.check("x", "another-long-one"))
+
+    def test_a_weak_or_mistyped_password_saves_nothing(self):
+        for form, text in (({"user": "me", "password": "short", "confirm": "short"}, b"too short"),
+                           ({"user": " ", "password": "a-long-password", "confirm": "a-long-password"}, b"too short"),
+                           ({"user": "me", "password": "a-long-password", "confirm": "another-long-one"}, b"differ")):
+            st, _, body = self.post(form)
+            self.assertEqual(st, 400)
+            self.assertIn(text, body)
+            self.assertFalse(auth.configured())
+
+    def test_a_request_not_addressed_to_localhost_cannot_create_the_account(self):
+        st, _, body = self.post({"user": "me", "password": "a-long-password", "confirm": "a-long-password"}, host="evil.example")
+        self.assertEqual(st, 403)                                       # DNS rebinding: the page of another site reaching 127.0.0.1
+        self.assertFalse(auth.configured())
+        self.assertNotIn(b'action="/setup"', self.get("/login", host="evil.example")[2])
+
+    def test_a_cross_site_request_cannot_create_the_account(self):
+        self.assertEqual(self.post({"user": "me", "password": "a-long-password", "confirm": "a-long-password"}, origin=False)[0], 403)
+        self.assertFalse(auth.configured())
+
+    def test_without_the_desktop_mode_the_page_never_offers_it(self):
+        os.environ.pop("FOLIOLIB_DESKTOP")
+        try:
+            self.assertNotIn(b'action="/setup"', self.get("/login")[2])
+            self.assertEqual(self.post({"user": "me", "password": "a-long-password", "confirm": "a-long-password"})[0], 403)
+            self.assertFalse(auth.configured())
+        finally:
+            os.environ["FOLIOLIB_DESKTOP"] = "1"
 
 
 class Server(unittest.TestCase):

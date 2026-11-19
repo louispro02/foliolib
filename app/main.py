@@ -12,6 +12,7 @@ import sys
 import threading
 import time
 import urllib.parse
+import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -22,13 +23,19 @@ import parsers
 import store
 from i18n import t
 
-STATIC = Path(__file__).parent / "static"
+# A PyInstaller executable unpacks its files into a temporary folder, `sys._MEIPASS`.
+STATIC = (Path(sys._MEIPASS) if getattr(sys, "frozen", False) else Path(__file__).parent) / "static"
 MAX_UPLOAD = 8 * 1024 * 1024
 TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".svg": "image/svg+xml", ".woff2": "font/woff2"}
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; "
        "form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
 job = {"running": False, "step": "", "started": 0, "done": 0, "notes": []}
 job_lock = threading.Lock()
+
+
+def desktop():
+    """Desktop mode (the executable for Windows / macOS): one person, on their own computer, reached on localhost only."""
+    return os.environ.get("FOLIOLIB_DESKTOP") == "1"
 
 
 def log(msg):
@@ -60,6 +67,13 @@ LOGIN = """<!doctype html><html lang="%(lang)s"><meta charset="utf-8"><meta name
 <form method="post" action="/login"><label>%(user)s<input name="user" autocomplete="username" autofocus required></label>
 <label>%(password)s<input name="password" type="password" autocomplete="current-password" required></label>
 <button>%(sign_in)s</button></form><p class="langs">%(langs)s</p></main></body></html>"""
+SETUP = """<!doctype html><html lang="%(lang)s"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FolioLib</title><link rel="stylesheet" href="/static/login.css"><body class="login"><main>
+<h1>FolioLib</h1><p class="muted">%(msg)s</p>
+<form method="post" action="/setup"><label>%(user)s<input name="user" autocomplete="username" autofocus required></label>
+<label>%(password)s<input name="password" type="password" autocomplete="new-password" minlength="12" required></label>
+<label>%(confirm)s<input name="confirm" type="password" autocomplete="new-password" minlength="12" required></label>
+<button>%(create)s</button></form><p class="langs">%(langs)s</p></main></body></html>"""
 LANG_COOKIE_AGE = 365 * 24 * 3600
 
 
@@ -117,6 +131,19 @@ class Handler(BaseHTTPRequestHandler):
         origin = self.headers.get("Origin", "")
         return bool(origin) and urllib.parse.urlparse(origin).netloc == self.headers.get("Host", "")
 
+    def _local(self):
+        """A request from this computer, addressed to localhost (a page of another site cannot reach us through DNS rebinding)."""
+        host = urllib.parse.urlparse("//" + self.headers.get("Host", "")).hostname
+        return self.client_address[0] in ("127.0.0.1", "::1") and host in ("localhost", "127.0.0.1", "::1")
+
+    def _can_setup(self):
+        """The account is created in the browser only in desktop mode, from this computer, while there is none."""
+        return desktop() and not auth.configured() and self._local()
+
+    def _session_cookie(self, value, age):
+        # Safari does not keep a Secure cookie sent over http://localhost; every other browser does
+        return f"sid={value}; Max-Age={age}; Path=/; HttpOnly; {'' if desktop() else 'Secure; '}SameSite=Strict"
+
     def _redirect(self, to, extra=None):
         self._send(303, b"", extra={"Location": to, **(extra or {})})
 
@@ -151,19 +178,28 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(404, "not found")
         self._send(200, p.read_bytes(), TYPES[p.suffix])
 
+    def _lang_links(self, lang):
+        current = ' aria-current="true"'
+        return " · ".join(f'<a href="/login?lang={code}"{current if code == lang else ""}>{html.escape(name)}</a>' for code, name in i18n.LANGUAGES.items())
+
+    def _setup_html(self, text):
+        lang = self._lang()
+        return SETUP % {"lang": lang, "msg": html.escape(text), "user": t(lang, "Username"), "password": t(lang, "Password"),
+                        "confirm": t(lang, "Confirm password"), "create": t(lang, "Create account"), "langs": self._lang_links(lang)}
+
     def _login_html(self, text):
         lang = self._lang()
-        current = ' aria-current="true"'
-        links = " · ".join(f'<a href="/login?lang={code}"{current if code == lang else ""}>{html.escape(name)}</a>' for code, name in i18n.LANGUAGES.items())
+        links = self._lang_links(lang)
         return LOGIN % {"lang": lang, "msg": html.escape(t(lang, text)), "user": t(lang, "Username"), "password": t(lang, "Password"),
                         "sign_in": t(lang, "Sign in"), "langs": links}
 
     def _login_page(self, text=""):
-        if not auth.configured():
+        setup = self._can_setup()
+        if not auth.configured() and not setup:
             text = "No account: run \"docker exec -it foliolib python main.py passwd\"."
         chosen = self._query_lang()      # an explicit choice made with the links of the page is remembered
         extra = {"Set-Cookie": f"lang={chosen}; Path=/; Max-Age={LANG_COOKIE_AGE}; SameSite=Strict"} if chosen in i18n.LANGUAGES else None
-        self._send(200, self._login_html(text or "Private access."), "text/html; charset=utf-8", extra)
+        self._send(200, self._setup_html(t(self._lang(), "Create your account: a username and a password of 12 characters or more. They stay on this computer.")) if setup else self._login_html(text or "Private access."), "text/html; charset=utf-8", extra)
 
     # ----- POST
     def do_POST(self):
@@ -176,11 +212,13 @@ class Handler(BaseHTTPRequestHandler):
         body = self.rfile.read(n)
         if path == "/login":
             return self._login(body)
+        if path == "/setup":
+            return self._setup(body)
         if not self._authed():
             return self._error(401, "sign-in required")
         db = store.connect()
         if path == "/logout":
-            return self._redirect("/login", {"Set-Cookie": "sid=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Strict"})
+            return self._redirect("/login", {"Set-Cookie": self._session_cookie("", 0)})
         if path == "/api/refresh":
             return self._json({"started": run_refresh()})
         if path == "/api/upload":
@@ -222,8 +260,19 @@ class Handler(BaseHTTPRequestHandler):
         if auth.locked():
             return self._send(429, self._login_html("Too many attempts: try again in a few minutes."), "text/html; charset=utf-8")
         if auth.check(user, pw):
-            return self._redirect("/", {"Set-Cookie": f"sid={auth.make_cookie()}; Max-Age={auth.SESSION_SECONDS}; Path=/; HttpOnly; Secure; SameSite=Strict"})
+            return self._redirect("/", {"Set-Cookie": self._session_cookie(auth.make_cookie(), auth.SESSION_SECONDS)})
         self._send(401, self._login_html("Incorrect username or password."), "text/html; charset=utf-8")
+
+    def _setup(self, body):
+        if not self._can_setup():
+            return self._send(403, "setup refused")
+        form = urllib.parse.parse_qs(body.decode("utf-8", "replace"))
+        user, pw, confirm = ((form.get(k) or [""])[0] for k in ("user", "password", "confirm"))
+        try:
+            auth.web_setup(user, pw, confirm)
+        except i18n.Msg as e:
+            return self._send(400, self._setup_html(e.text(self._lang())), "text/html; charset=utf-8")
+        self._redirect("/", {"Set-Cookie": self._session_cookie(auth.make_cookie(), auth.SESSION_SECONDS)})
 
     def do_PUT(self):
         self._send(405, "method not allowed")
@@ -231,19 +280,29 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def serve():
-    store.DATA.mkdir(parents=True, exist_ok=True)
+    store.DATA.mkdir(mode=0o700, parents=True, exist_ok=True)
     db = store.connect()
     need = store.migrate(db)
     if need:
         log("parser fixed, re-upload needed: " + ", ".join(need))
     db.close()
     port = int(sys.argv[sys.argv.index("--port") + 1]) if "--port" in sys.argv else int(os.environ.get("FOLIOLIB_PORT", "8080"))
-    host = os.environ.get("FOLIOLIB_HOST", "0.0.0.0")
-    srv = ThreadingHTTPServer((host, port), Handler)
+    host = os.environ.get("FOLIOLIB_HOST", "127.0.0.1" if desktop() else "0.0.0.0")
+    for attempt in range(20 if desktop() else 1):            # on a computer, another program may already use the port: take the next one
+        try:
+            srv = ThreadingHTTPServer((host, port + attempt), Handler)
+            port += attempt
+            break
+        except OSError:
+            if attempt == 19 or not desktop():
+                raise
     # As PID 1 of a container, Python ignores SIGTERM unless told otherwise: `docker stop` would wait 10 s, then kill us.
     # shutdown() blocks until the loop exits, so it must not run in the thread that runs the loop.
     signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=srv.shutdown, daemon=True).start())
     log("foliolib ready on %s:%d (account configured: %s)" % (host, port, auth.configured()))
+    if desktop():
+        log("Opening http://localhost:%d in your browser. Close this window to quit FolioLib. Your data: %s" % (port, store.DATA))
+        threading.Timer(0.5, webbrowser.open_new_tab, ["http://localhost:%d" % port]).start()
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

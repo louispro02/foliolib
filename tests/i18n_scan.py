@@ -56,7 +56,7 @@ def html_keys(source):
 
 
 # Where the text is, in each call that takes one: the position of the argument.
-_CALLS = {"t": 1, "tr": 1, "Msg": 0, "_error": 1, "say": 0, "_login_html": 0}
+_CALLS = {"t": 1, "tr": 1, "Msg": 0, "_error": 1, "say": 0, "_login_html": 0, "_setup_html": 0}
 
 
 def _strings(node):

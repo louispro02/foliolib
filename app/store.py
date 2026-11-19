@@ -1,11 +1,24 @@
-"""SQLite database (WAL): imported records, instruments, prices, rates, settings. Everything lives in /data (mode 700)."""
+"""SQLite database (WAL): imported records, instruments, prices, rates, settings. Everything lives in the data directory (/data in Docker, ~/.foliolib on a computer; mode 700)."""
 import json
 import os
 import sqlite3
 import time
 from pathlib import Path
 
-DATA = Path(os.environ.get("FOLIOLIB_DATA", "/data"))
+
+
+def _default_data_dir():
+    """FOLIOLIB_DATA if set; else /data when it exists and is writable (the Docker image); else ~/.foliolib (a computer)."""
+    env = os.environ.get("FOLIOLIB_DATA")
+    if env:
+        return Path(env)
+    root = Path("/data")
+    if root.is_dir() and os.access(root, os.W_OK):
+        return root
+    return Path.home() / ".foliolib"
+
+
+DATA = _default_data_dir()
 DB_PATH = DATA / "foliolib.sqlite"
 
 SCHEMA = """

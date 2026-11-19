@@ -32,7 +32,11 @@ credentials are involved, and there is nothing to install besides Python or Dock
 
 ## Quickstart
 
-You need Docker with the Compose plugin.
+**On Windows or macOS, without Docker or a terminal:** download the program from the
+[latest release](https://github.com/louispro02/foliolib/releases/latest) and double-click it. See the
+[desktop installation guide](docs/desktop-installation.md) (it explains the security warning your system will show).
+
+**With Docker** (a server, a Raspberry Pi, a NAS): you need Docker with the Compose plugin.
 
 ```bash
 git clone https://github.com/louispro02/foliolib.git
@@ -143,9 +147,10 @@ Found a vulnerability? Please report it privately through the repository's **Sec
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `FOLIOLIB_DATA` | `/data` (in Docker) | Directory holding the database, uploads and login |
+| `FOLIOLIB_DATA` | `/data` (in Docker), else `~/.foliolib` | Directory holding the database, uploads and login |
 | `FOLIOLIB_PORT` | `8080` | Port to listen on (`serve --port N` overrides it) |
-| `FOLIOLIB_HOST` | `0.0.0.0` | Address to listen on; use `127.0.0.1` to keep it local |
+| `FOLIOLIB_HOST` | `0.0.0.0` (`127.0.0.1` in desktop mode) | Address to listen on; use `127.0.0.1` to keep it local |
+| `FOLIOLIB_DESKTOP` | unset | `1` for the [desktop program](docs/desktop-installation.md): localhost only, opens the browser, creates the account in the page. Never set it in a container |
 | `TZ` | `UTC` in the Docker image | Time zone used for "today" and for the logs (set it in your shell for Compose) |
 
 Commands: `python main.py serve` (default), `passwd` (create or change the login), `report` (a text summary), `import FILE`

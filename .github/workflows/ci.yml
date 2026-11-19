@@ -36,7 +36,7 @@ jobs:
       - name: Install Ruff
         run: pip install ruff==0.17.5
       - name: Check
-        run: ruff check app tests docs
+        run: ruff check app tests docs desktop_entrypoint.py
 
   docker:
     name: Docker image
