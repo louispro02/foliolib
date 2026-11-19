@@ -7,15 +7,18 @@
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<a class="skip" href="#positions">Skip to holdings</a>
+<!-- The English texts are the source: an element marked data-t is translated from its own text, and data-t-attrs lists the
+     attributes to translate (comma separated). See `translateStatic()` in app.js and app/i18n/. -->
+<a class="skip" href="#positions" data-t>Skip to holdings</a>
 <header class="bar">
   <span class="mark">FolioLib</span>
   <span id="fresh" class="fresh" role="status">…</span>
-  <nav class="tools" aria-label="Actions">
-    <div class="seg" id="acct" role="group" aria-label="Account"></div>
-    <button id="btn-refresh" class="btn">Refresh</button>
-    <button id="btn-import" class="btn solid">Import</button>
-    <form method="post" action="/logout"><button class="btn quiet" type="submit">Sign Out</button></form>
+  <nav class="tools" aria-label="Actions" data-t-attrs="aria-label">
+    <div class="seg" id="acct" role="group" aria-label="Account" data-t-attrs="aria-label"></div>
+    <button id="btn-refresh" class="btn" data-t>Refresh</button>
+    <button id="btn-import" class="btn solid" data-t>Import</button>
+    <div class="seg" id="lang" role="group" aria-label="Language" data-t-attrs="aria-label"></div>
+    <form method="post" action="/logout"><button class="btn quiet" type="submit" data-t>Sign Out</button></form>
   </nav>
 </header>
 
@@ -24,7 +27,7 @@
 
   <section class="hero" aria-labelledby="hero-label">
     <div class="hero-main">
-      <p id="hero-label" class="label">Total Portfolio Value as of <span id="hero-date"></span></p>
+      <p id="hero-label" class="label"><span data-t>Total Portfolio Value as of</span> <span id="hero-date"></span></p>
       <p id="hero-value" class="big">—</p>
       <p id="hero-delta" class="delta"></p>
     </div>
@@ -32,48 +35,48 @@
   </section>
 
   <section class="block" aria-labelledby="h-curve">
-    <div class="block-h"><h2 id="h-curve">Portfolio History</h2><div class="seg" id="range" role="group" aria-label="Period"></div></div>
+    <div class="block-h"><h2 id="h-curve" data-t>Portfolio History</h2><div class="seg" id="range" role="group" aria-label="Period" data-t-attrs="aria-label"></div></div>
     <div id="chart-main" class="chart"></div>
     <div class="legend" id="legend-main"></div>
   </section>
 
   <section class="block" id="compare-block" aria-labelledby="h-cmp">
-    <div class="block-h"><h2 id="h-cmp">Benchmark Comparison</h2></div>
+    <div class="block-h"><h2 id="h-cmp" data-t>Benchmark Comparison</h2></div>
     <p class="lede" id="cmp-lede"></p>
     <div id="compare"></div>
   </section>
 
   <section class="block" id="perf-block" aria-labelledby="h-perf">
-    <div class="block-h"><h2 id="h-perf">Performance &amp; Risk</h2><span class="muted small" id="perf-since"></span></div>
+    <div class="block-h"><h2 id="h-perf" data-t>Performance &amp; Risk</h2><span class="muted small" id="perf-since"></span></div>
     <div id="risk" class="tiles"></div>
-    <div class="subh"><h3>Cumulative performance, base 100</h3><span class="muted small">deposits neutralized (time-weighted return)</span></div>
+    <div class="subh"><h3 data-t>Cumulative performance, base 100</h3><span class="muted small" data-t>deposits neutralized (time-weighted return)</span></div>
     <div id="chart-idx" class="chart"></div>
     <div class="legend chips" id="chips-idx"></div>
-    <div class="subh"><h3>Portfolio and indices over the same period</h3></div>
-    <div class="table-wrap" tabindex="0" aria-label="Indicator comparison, scrolls horizontally"><table id="bench-table" class="plain"><thead></thead><tbody></tbody></table></div>
-    <div class="subh"><h3>Absolute change</h3></div>
-    <div class="table-wrap" tabindex="0" aria-label="Absolute change by period, scrolls horizontally"><table id="periods" class="plain"><thead></thead><tbody></tbody></table></div>
+    <div class="subh"><h3 data-t>Portfolio and indices over the same period</h3></div>
+    <div class="table-wrap" tabindex="0" aria-label="Indicator comparison, scrolls horizontally" data-t-attrs="aria-label"><table id="bench-table" class="plain"><thead></thead><tbody></tbody></table></div>
+    <div class="subh"><h3 data-t>Absolute change</h3></div>
+    <div class="table-wrap" tabindex="0" aria-label="Absolute change by period, scrolls horizontally" data-t-attrs="aria-label"><table id="periods" class="plain"><thead></thead><tbody></tbody></table></div>
   </section>
 
   <section class="block" id="heat-block" aria-labelledby="h-heat">
-    <div class="block-h"><h2 id="h-heat">Periodic Returns (Heatmap)</h2><div class="seg" id="heat-by" role="group" aria-label="Period"></div></div>
+    <div class="block-h"><h2 id="h-heat" data-t>Periodic Returns (Heatmap)</h2><div class="seg" id="heat-by" role="group" aria-label="Period" data-t-attrs="aria-label"></div></div>
     <div id="heat" class="heat-wrap"></div>
     <p class="muted small" id="heat-note"></p>
   </section>
 
   <section class="block" id="positions" aria-labelledby="h-pos">
-    <div class="block-h"><h2 id="h-pos">Holdings &amp; Positions</h2><input id="q" class="search" type="search" placeholder="Filter…" aria-label="Filter positions"></div>
-    <div class="table-wrap" tabindex="0" aria-label="Positions table, scrolls horizontally"><table id="pos"><thead></thead><tbody></tbody></table></div>
+    <div class="block-h"><h2 id="h-pos" data-t>Holdings &amp; Positions</h2><input id="q" class="search" type="search" placeholder="Filter…" aria-label="Filter positions" data-t-attrs="placeholder,aria-label"></div>
+    <div class="table-wrap" tabindex="0" aria-label="Positions table, scrolls horizontally" data-t-attrs="aria-label"><table id="pos"><thead></thead><tbody></tbody></table></div>
     <p class="muted small" id="pos-note"></p>
   </section>
 
   <section class="duo">
     <div class="block" aria-labelledby="h-alloc">
-      <div class="block-h"><h2 id="h-alloc">Asset Allocation</h2><div class="seg" id="alloc-by" role="group" aria-label="Group by"></div></div>
+      <div class="block-h"><h2 id="h-alloc" data-t>Asset Allocation</h2><div class="seg" id="alloc-by" role="group" aria-label="Group by" data-t-attrs="aria-label"></div></div>
       <div id="alloc"></div>
     </div>
     <div class="block" aria-labelledby="h-env">
-      <div class="block-h"><h2 id="h-env">Tax Wrappers &amp; Watch Points</h2></div>
+      <div class="block-h"><h2 id="h-env" data-t>Tax Wrappers &amp; Watch Points</h2></div>
       <div id="env"></div>
       <ul id="watch" class="watch"></ul>
     </div>
@@ -81,18 +84,18 @@
 
   <section class="duo">
     <div class="block" aria-labelledby="h-div">
-      <div class="block-h"><h2 id="h-div">Dividends</h2><span class="muted small" id="div-total"></span></div>
+      <div class="block-h"><h2 id="h-div" data-t>Dividends</h2><span class="muted small" id="div-total"></span></div>
       <div id="chart-div" class="chart short"></div>
       <div id="divlist" class="ledger"></div>
     </div>
     <div class="block" aria-labelledby="h-flow">
-      <div class="block-h"><h2 id="h-flow">Deposits</h2></div>
+      <div class="block-h"><h2 id="h-flow" data-t>Deposits</h2></div>
       <div id="flows" class="ledger"></div>
     </div>
   </section>
 
   <section class="block" id="costs-block" aria-labelledby="h-costs">
-    <div class="block-h"><h2 id="h-costs">Fees, Taxes &amp; Source of Gain</h2></div>
+    <div class="block-h"><h2 id="h-costs" data-t>Fees, Taxes &amp; Source of Gain</h2></div>
     <div class="duo tight">
       <div id="costs"></div>
       <div id="bridge"></div>
@@ -100,28 +103,28 @@
   </section>
 
   <section class="block" id="sim-block" aria-labelledby="h-sim">
-    <div class="block-h"><h2 id="h-sim">Long-Term Wealth Projection</h2><span class="muted small">editable assumptions · simulation, not a forecast</span></div>
+    <div class="block-h"><h2 id="h-sim" data-t>Long-Term Wealth Projection</h2><span class="muted small" data-t>editable assumptions · simulation, not a forecast</span></div>
     <div id="sim" class="sim"></div>
-    <p class="muted small">Smoothed, pre-tax projection without crisis years: a simulation, not a forecast. The two dotted curves (±2 points of return) give an order of magnitude of the possible gap, not a limit. The calculation runs in your browser; nothing is sent to the server.</p>
+    <p class="muted small" data-t>Smoothed, pre-tax projection without crisis years: a simulation, not a forecast. The two dotted curves (±2 points of return) give an order of magnitude of the possible gap, not a limit. The calculation runs in your browser; nothing is sent to the server.</p>
   </section>
 
   <section class="block" id="data" aria-labelledby="h-data">
-    <div class="block-h"><h2 id="h-data">Data Management</h2></div>
-    <div id="drop" class="drop" tabindex="0" role="button" aria-label="Drop or choose CSV files">
-      <strong>Drop your CSV exports here</strong>
-      <span>DEGIRO: Transactions, Account, Portfolio · Fortuneo: operations and account history · or the FolioLib generic CSV</span>
-      <span class="muted">A more recent file complements the older one: lines already known are not counted twice.</span>
+    <div class="block-h"><h2 id="h-data" data-t>Data Management</h2></div>
+    <div id="drop" class="drop" tabindex="0" role="button" aria-label="Drop or choose CSV files" data-t-attrs="aria-label">
+      <strong data-t>Drop your CSV exports here</strong>
+      <span data-t>DEGIRO: Transactions, Account, Portfolio · Fortuneo: operations and account history · or the FolioLib generic CSV</span>
+      <span class="muted" data-t>A more recent file complements the older one: lines already known are not counted twice.</span>
       <input id="file" type="file" accept=".csv,text/csv" multiple hidden>
     </div>
     <p id="upmsg" class="muted small" aria-live="polite"></p>
     <div id="unmapped"></div>
     <div id="files" class="ledger"></div>
-    <details class="danger"><summary>Erase imported data</summary>
-      <p class="muted small">Deletes the imported operations (not the prices). Irreversible: you will have to upload the exports again.</p>
-      <button id="btn-wipe" class="btn alert">Erase everything</button></details>
+    <details class="danger"><summary data-t>Erase imported data</summary>
+      <p class="muted small" data-t>Deletes the imported operations (not the prices). Irreversible: you will have to upload the exports again.</p>
+      <button id="btn-wipe" class="btn alert" data-t>Erase everything</button></details>
   </section>
 
-  <p class="foot muted small">Delayed prices from Yahoo Finance (unofficial), Twelve Data as a fallback, exchange rates from the ECB: for information only. Only symbols leave the host, never a quantity or an amount. This is not investment advice.</p>
+  <p class="foot muted small" data-t>Delayed prices from Yahoo Finance (unofficial), Twelve Data as a fallback, exchange rates from the ECB: for information only. Only symbols leave the host, never a quantity or an amount. This is not investment advice.</p>
 </main>
 <div id="tip" class="tip" hidden></div>
 <script src="/static/app.js"></script>

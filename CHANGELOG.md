@@ -43,7 +43,9 @@ First public release. Replace "unreleased" with the release date when tagging.
 - **Docker**: multi-architecture image (amd64, arm64) running as a non-root user on a read-only filesystem with no Linux
   capabilities, a Compose file with a `/healthz` health check, and a clean shutdown on `SIGTERM`.
 - **Continuous integration**: tests on Python 3.11, 3.12 and 3.13, Ruff, and a Docker build with a smoke test.
-- English-only interface, documentation and code comments.
+- **English and French interface**, chosen from the browser's language or with the EN | FR switch (also on the sign-in page).
+  English is the source language and a language is one file (`app/i18n/`): a text without a translation shows in English.
+- English documentation and code comments.
 
 ### Security
 

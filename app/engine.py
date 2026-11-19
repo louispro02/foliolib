@@ -7,6 +7,8 @@ import ledger
 import perf
 import quotes
 import store
+from i18n import join_and, number
+from i18n import t as tr      # `t` is a common local name in this module (a table, a date): do not shadow the function
 
 # Benchmarks: **accumulating** ETFs listed in euros (dividends reinvested, ETF fees deducted), the only fair way to compare
 # them with a portfolio that reinvests. Checked on Yahoo on 2026-11-17: daily prices since 2023 at least.
@@ -62,7 +64,7 @@ def refresh(db, data_dir, progress=None):
     first = (date.fromisoformat(min(dates)) - timedelta(days=14)).isoformat() if dates else (date.today() - timedelta(days=365)).isoformat()
     try:
         for n, isin in enumerate(isins, 1):
-            say(f"Prices {n}/{len(isins)}")
+            say("Prices {n}/{total}", {"n": n, "total": len(isins)})
             row = db.execute("SELECT symbol, ccy, manual, tried FROM instruments WHERE isin=?", (isin,)).fetchone()
             symbol = row[0] if row else None
             if not symbol:
@@ -79,14 +81,14 @@ def refresh(db, data_dir, progress=None):
                     continue
             _refresh_symbol(db, symbol, tkey, now, first)
         for i, (_, label, sym, _) in enumerate(BENCHMARKS, 1):
-            say(f"Benchmarks {i}/{len(BENCHMARKS)}")
+            say("Benchmarks {n}/{total}", {"n": i, "total": len(BENCHMARKS)})
             _refresh_symbol(db, sym, tkey, now, first)
-        say("Exchange rates")
+        say("Exchange rates", {})
         _refresh_fx(db, records)
         store.meta_set(db, "last_refresh", str(now))
         store.meta_set(db, "last_error", "")
     except quotes.Refused as e:
-        store.meta_set(db, "last_error", f"{e}: keeping the last known prices")
+        store.meta_set(db, "last_error", str(e))
         notes.append(str(e))
     return notes
 
@@ -165,7 +167,7 @@ SAVINGS_RATE = 0.03       # assumption: a savings account at 3 % a year, to meas
 PEA_CAP = 150_000         # PEA deposit ceiling
 
 
-def _compare(flows, today, tables, total_value):
+def _compare(flows, today, tables, total_value, lang="en"):
     """Same deposit schedule placed in each benchmark index or in a savings account: value, gap, annualized return."""
     if not flows:
         return None
@@ -179,13 +181,13 @@ def _compare(flows, today, tables, total_value):
             continue
         units = sum(a / tb.at(d) for d, a in flows if tb.at(d))
         val = units * tb.at(today)
-        rows.append({"key": key, "label": label, "desc": desc, "value": val, "irr": ledger.xirr(fl, val, today), "diff": total_value - val})
+        rows.append({"key": key, "label": tr(lang, label), "desc": tr(lang, desc), "value": val, "irr": ledger.xirr(fl, val, today), "diff": total_value - val})
     livret = sum(a * (1 + SAVINGS_RATE) ** ((t - date.fromisoformat(d)).days / 365.0) for d, a in flows)
     return {"invested": invested, "portfolio": total_value, "irr_portfolio": ledger.xirr(fl, total_value, today),
             "benchmarks": rows, "livret": livret, "irr_livret": SAVINGS_RATE, "alpha_livret": total_value - livret}
 
 
-def _performance(records, alias, closes, fx, inst, res, today):
+def _performance(records, alias, closes, fx, inst, res, today, lang="en"):
     """TWR, risk, monthly returns, absolute change and base-100 curves, for all accounts then each one."""
     ev = ledger.timeline(records, alias)
 
@@ -211,13 +213,13 @@ def _performance(records, alias, closes, fx, inst, res, today):
             bd = perf.from_prices(tb, stamps) if tb else []
             bm = perf.metrics(bd) if bd else None
             if bm:
-                bench.append({"key": bkey, "label": label, "desc": desc, "m": _round_m(bm)})
+                bench.append({"key": bkey, "label": tr(lang, label), "desc": tr(lang, desc), "m": _round_m(bm)})
                 curves[bkey] = {d["date"]: d["idx"] for d in bd}
         md = perf.measured(days)
         step = 1 if len(md) < 700 else 2
         keep = [i for i in range(len(md)) if i % step == 0 or i == len(md) - 1]
         out[key] = {
-            "m": _round_m(m), "bench": bench, "periods": perf.periods(days),
+            "m": _round_m(m), "bench": bench, "periods": [{**p, "label": tr(lang, p["label"])} for p in perf.periods(days)],
             "monthly": [[a, round(b, 5), c] for a, b, c in perf.monthly_returns(perf.measured(days))],
             "value_end": days[-1]["v"],
             "curve": {"days": [stamps[i] for i in keep], "portfolio": [round(md[i]["idx"] * 100, 2) for i in keep],
@@ -233,7 +235,7 @@ def _round_m(m):
 TAX_RATE_CTO = 0.30        # assumption: flat tax (30 %), to estimate the latent tax on the brokerage account
 
 
-def _costs(res, pos, flows, kpi_gain, total_unreal, total_real, div_total):
+def _costs(res, pos, flows, kpi_gain, total_unreal, total_real, div_total, lang="en"):
     c = res["costs"]
     first = date.fromisoformat(flows[0][0]) if flows else date.today()
     years = max((date.today() - first).days / 365.25, 0.1)
@@ -245,28 +247,30 @@ def _costs(res, pos, flows, kpi_gain, total_unreal, total_real, div_total):
     cto_gain = sum(p["gain"] for p in pos if p["broker"] != "fortuneo")      # every account but the PEA (taxed differently)
     other = kpi_gain - (total_unreal + total_real + div_total)
     return {
-        "fees": [{"label": a, "eur": round(b, 2)} for a, b in fees], "taxes": [{"label": a, "eur": round(b, 2)} for a, b in taxes],
+        "fees": [{"label": tr(lang, a), "eur": round(b, 2)} for a, b in fees], "taxes": [{"label": tr(lang, a), "eur": round(b, 2)} for a, b in taxes],
         "total_fees": round(tf, 2), "total_taxes": round(tt, 2), "pct_invested": (tf + tt) / invested, "per_year_pct": (tf + tt) / invested / years,
         "tax_estimate": {"rate": TAX_RATE_CTO, "base": cto_gain, "amount": max(0.0, cto_gain) * TAX_RATE_CTO},
         "bridge": {"gain": kpi_gain, "unrealized": total_unreal, "realized": total_real, "dividends": div_total, "other": other},
     }
 
 
-def _watch(pos, kpi, accounts_flows):
+def _watch(pos, kpi, accounts_flows, lang="en"):
     """Facts to keep an eye on, computed from the numbers (never buy or sell advice)."""
     out = []
     if pos:
         top = max(pos, key=lambda p: p["weight"])
         if top["weight"] > 0.30:
-            out.append({"kind": "concentration", "text": f"{top['name']} is {top['weight'] * 100:.1f} % of your securities."})
+            out.append({"kind": "concentration", "text": tr(lang, "{name} is {pct} % of your securities.", name=top["name"], pct=number(lang, top["weight"] * 100, 1))})
     micro = [p for p in pos if p["weight"] < 0.005]
     if len(micro) >= 2:
-        out.append({"kind": "micro", "text": f"{len(micro)} holdings under 0.5 % of the portfolio ({sum(p['value'] for p in micro):.0f} € in total): " + ", ".join(p["name"].title() for p in micro[:4]) + "."})
+        out.append({"kind": "micro", "text": tr(lang, "{count} holdings under 0.5 % of the portfolio ({total} € in total): {names}.", count=len(micro),
+                                              total=number(lang, sum(p["value"] for p in micro), 0), names=", ".join(p["name"].title() for p in micro[:4]))})
     for p in pos:
         if p["gain_pct"] is not None and p["gain_pct"] < -0.30 and p["value"] > 50:
-            out.append({"kind": "loss", "text": f"{p['name'].title()}: {p['gain_pct'] * 100:.0f} % ({p['gain']:+.0f} €) versus cost basis."})
+            out.append({"kind": "loss", "text": tr(lang, "{name}: {pct} % ({gain} €) versus cost basis.", name=p["name"].title(),
+                                                  pct=number(lang, p["gain_pct"] * 100, 0), gain=number(lang, p["gain"], 0, signed=True))})
     if kpi["cash"] and kpi["value"] and kpi["cash"] / kpi["value"] > 0.05:
-        out.append({"kind": "cash", "text": f"Cash: {kpi['cash'] / kpi['value'] * 100:.1f} % of the total."})
+        out.append({"kind": "cash", "text": tr(lang, "Cash: {pct} % of the total.", pct=number(lang, kpi["cash"] / kpi["value"] * 100, 1))})
     return out
 
 
@@ -275,7 +279,7 @@ def _category(name):
     return "ETF" if ("etf" in n or "ucits" in n) else "Stock"
 
 
-def compute(db, data_dir):
+def compute(db, data_dir, lang="en"):
     records = store.all_records(db)
     alias = store.aliases(db)
     today = date.today().isoformat()
@@ -300,12 +304,13 @@ def compute(db, data_dir):
         if q:
             quote[sym] = q
 
-    out_pos, warnings = [], list(res["warnings"])
+    out_pos, warnings = [], [tr(lang, template, **params) for template, params in res["warnings"]]
     if store.meta_get(db, "demo"):
-        warnings.insert(0, "Demo mode: every operation and price on this page is synthetic.")
+        warnings.insert(0, tr(lang, "Demo mode: every operation and price on this page is synthetic."))
     pending = [k for k in store.meta_get(db, "reimport").split(",") if k and not db.execute("SELECT 1 FROM files WHERE kind=?", (k,)).fetchone()]
     if pending:
-        warnings.append("The parser was fixed: re-upload " + " and ".join({"degiro_transactions": "Transactions.csv", "degiro_account": "Account.csv"}.get(k, k) for k in pending) + " (DEGIRO) for the figures to be correct.")
+        warnings.append(tr(lang, "The parser was fixed: re-upload {files} (DEGIRO) for the figures to be correct.",
+                          files=join_and(lang, [{"degiro_transactions": "Transactions.csv", "degiro_account": "Account.csv"}.get(k, k) for k in pending])))
     total_mv = 0.0
     for (broker, isin), p in res["positions"].items():
         if p.qty <= 0:
@@ -327,11 +332,11 @@ def compute(db, data_dir):
             price_eur, source = snap["price"] * rate, "export"
         if price_eur is None:
             price_eur, source = (p.cost / p.qty if p.qty else 0.0), "cost basis"
-            warnings.append(f"{p.name}: no price, valued at cost basis.")
+            warnings.append(tr(lang, "{name}: no price, valued at cost basis.", name=p.name))
         mv = price_eur * p.qty
         total_mv += mv
         out_pos.append({
-            "broker": broker, "account": ledger.account_label(broker), "account_short": ledger.account_short(broker), "isin": isin, "name": p.name, "category": _category(p.name),
+            "broker": broker, "account": ledger.account_label(broker, lang), "account_short": ledger.account_short(broker, lang), "isin": isin, "name": p.name, "category": tr(lang, _category(p.name)),
             "symbol": sym, "ccy": ccy or (snap or {}).get("ccy") or "EUR", "qty": p.qty, "cost": p.cost, "pru": p.cost / p.qty,
             "price": price_eur, "value": mv, "gain": mv - p.cost, "gain_pct": (mv / p.cost - 1) if p.cost else None,
             "day_pct": (price_eur / prev - 1) if prev else None, "day_eur": (price_eur - prev) * p.qty if prev else None,
@@ -339,7 +344,7 @@ def compute(db, data_dir):
             "spark": _spark(closes.get(sym), fx, qccy_of(quote, sym)) if sym else [],
         })
         if p.unmapped:
-            warnings.append(f"\"{p.name}\" (Fortuneo) has no ISIN: map it below.")
+            warnings.append(tr(lang, "\"{name}\" (Fortuneo) has no ISIN: map it below.", name=p.name))
     for r in out_pos:
         r["weight"] = r["value"] / total_mv if total_mv else 0.0
     out_pos.sort(key=lambda r: -r["value"])
@@ -355,7 +360,7 @@ def compute(db, data_dir):
         fl = [(d, a) for d, bb, a in flows if bb == b]
         val = sum(r["value"] for r in out_pos if r["broker"] == b) + cash[b]
         inv = sum(a for _, a in fl)
-        return {"key": b, "account": ledger.account_label(b), "short": ledger.account_short(b), "value": val, "invested": inv, "gain": val - inv,
+        return {"key": b, "account": ledger.account_label(b, lang), "short": ledger.account_short(b, lang), "value": val, "invested": inv, "gain": val - inv,
                 "gain_pct": (val / inv - 1) if inv else None, "irr": ledger.xirr(fl, val, today), "cash": cash[b],
                 "securities": val - cash[b]}
 
@@ -368,26 +373,27 @@ def compute(db, data_dir):
         by_month[d[:7]] = by_month.get(d[:7], 0.0) + e
     unconv = sum(1 for *_, ok in divs if not ok)
     if unconv:
-        warnings.append(f"{unconv} dividend(s) in a foreign currency without an exchange rate: counted at face value until rates are loaded.")
+        warnings.append(tr(lang, "{count} dividend(s) in a foreign currency without an exchange rate: counted at face value until rates are loaded.", count=unconv))
 
     series = _series(records, alias, closes, fx, inst, flows, today)
     try:
-        performance = _performance(records, alias, closes, fx, inst, res, today)
+        performance = _performance(records, alias, closes, fx, inst, res, today, lang)
     except Exception as exc:                      # an indicator calculation must never prevent displaying the rest
         performance = {}
-        warnings.append("Performance indicators unavailable: " + type(exc).__name__)
+        warnings.append(tr(lang, "Performance indicators unavailable: {error}", error=type(exc).__name__))
     costs = _costs(res, out_pos, flows, kpi_gain=total_value - invested, total_unreal=sum(r["gain"] for r in out_pos),
-                   total_real=sum(p.realized for p in res["positions"].values()), div_total=div_total)
-    compare = _compare([(d, a) for d, _, a in flows], today, closes, total_value)
+                   total_real=sum(p.realized for p in res["positions"].values()), div_total=div_total, lang=lang)
+    compare = _compare([(d, a) for d, _, a in flows], today, closes, total_value, lang)
     pea_in = [(d, a) for d, b, a in flows if b == "fortuneo"]
     pea_net = sum(a for _, a in pea_in)
     envelopes = ({"pea": {"invested": pea_net, "cap": PEA_CAP, "pct": pea_net / PEA_CAP, "opened": pea_in[0][0],
                           "five_years": pea_in[0][0].replace(pea_in[0][0][:4], str(int(pea_in[0][0][:4]) + 5), 1)}} if pea_in else {})
     last = int(store.meta_get(db, "last_refresh", "0") or 0)
+    last_error = store.meta_get(db, "last_error")
     realized = sum(p.realized for p in res["positions"].values())
     unreal = sum(r["gain"] for r in out_pos)
     return {
-        "as_of": today, "last_refresh": last, "last_error": store.meta_get(db, "last_error"),
+        "as_of": today, "last_refresh": last, "last_error": tr(lang, "{error}: keeping the last known prices", error=last_error) if last_error else "",
         "kpi": {"value": total_value, "securities": total_mv, "cash": sum(cash.values()), "invested": invested,
                 "gain": total_value - invested, "gain_pct": (total_value / invested - 1) if invested else None,
                 "irr": ledger.xirr(total_flows, total_value, today), "unrealized": unreal, "realized": realized,
@@ -395,9 +401,9 @@ def compute(db, data_dir):
                 "day_eur": sum(r["day_eur"] or 0.0 for r in out_pos), "cost": sum(r["cost"] for r in out_pos)},
         "accounts": [per_broker(b) for b in brokers if any(bb == b for _, bb, _ in flows) or cash[b]],
         "positions": out_pos, "series": series, "perf": performance, "costs": costs, "compare": compare, "envelopes": envelopes,
-        "watch": _watch(out_pos, {"cash": sum(cash.values()), "value": total_value}, flows), "dividend_months": sorted(by_month.items()),
-        "dividend_list": [{"date": d, "account": ledger.account_label(b), "name": n, "eur": e} for d, b, _, n, e, _ in divs][-40:][::-1],
-        "flows": [{"date": d, "account": ledger.account_label(b), "eur": a} for d, b, a in flows][-40:][::-1],
+        "watch": _watch(out_pos, {"cash": sum(cash.values()), "value": total_value}, flows, lang), "dividend_months": sorted(by_month.items()),
+        "dividend_list": [{"date": d, "account": ledger.account_label(b, lang), "name": n, "eur": e} for d, b, _, n, e, _ in divs][-40:][::-1],
+        "flows": [{"date": d, "account": ledger.account_label(b, lang), "eur": a} for d, b, a in flows][-40:][::-1],
         "files": [{"name": n, "kind": k, "n": c, "new": nw, "at": at} for n, k, c, nw, at in
                   db.execute("SELECT name, kind, n, new, added FROM files ORDER BY id DESC LIMIT 30")],
         "unmapped": sorted({p.name for p in res["positions"].values() if p.unmapped}),

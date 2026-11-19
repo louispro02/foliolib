@@ -89,6 +89,16 @@ FOLIOLIB_DATA=../data python3 main.py serve --port 8080
 ![Holdings and allocation](docs/screenshots/holdings.png)
 ![Data management and import](docs/screenshots/import.png)
 
+## Languages
+
+The interface is available in **English** and **French**. It follows your browser's language; the **EN | FR** switch in the
+header (and the links on the sign-in page) overrides it, and your choice is remembered. Dates, numbers and the wording of the
+messages follow the language. The command line and the logs stay in English.
+
+![The same dashboard in French](docs/screenshots/dashboard-fr.png)
+
+Adding a language takes one file and no change to the code: see [CONTRIBUTING.md](CONTRIBUTING.md#translate-foliolib).
+
 ## Supported exports
 
 | Broker | Files | Language |

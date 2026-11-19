@@ -4,6 +4,7 @@
     docker exec foliolib python main.py report         value and positions as text
     python main.py demo                                load synthetic demo data into an empty database
 """
+import html
 import json
 import os
 import signal
@@ -16,8 +17,10 @@ from pathlib import Path
 
 import auth
 import engine
+import i18n
 import parsers
 import store
+from i18n import t
 
 STATIC = Path(__file__).parent / "static"
 MAX_UPLOAD = 8 * 1024 * 1024
@@ -36,12 +39,12 @@ def run_refresh():
     with job_lock:
         if job["running"]:
             return False
-        job.update(running=True, step="Starting", started=time.time(), notes=[])
+        job.update(running=True, step=("Starting", {}), started=time.time(), notes=[])
 
     def work():
         try:
             db = store.connect()
-            job["notes"] = engine.refresh(db, store.DATA, lambda s: job.update(step=s))
+            job["notes"] = engine.refresh(db, store.DATA, lambda text, params=None: job.update(step=(text, params or {})))
         except Exception as e:                                   # a bug must not block the page
             job["notes"] = ["internal error: " + type(e).__name__]
             log("refresh : " + repr(e))
@@ -51,12 +54,13 @@ def run_refresh():
     return True
 
 
-LOGIN = """<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+LOGIN = """<!doctype html><html lang="%(lang)s"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>FolioLib</title><link rel="stylesheet" href="/static/login.css"><body class="login"><main>
 <h1>FolioLib</h1><p class="muted">%(msg)s</p>
-<form method="post" action="/login"><label>Username<input name="user" autocomplete="username" autofocus required></label>
-<label>Password<input name="password" type="password" autocomplete="current-password" required></label>
-<button>Sign in</button></form></main></body></html>"""
+<form method="post" action="/login"><label>%(user)s<input name="user" autocomplete="username" autofocus required></label>
+<label>%(password)s<input name="password" type="password" autocomplete="current-password" required></label>
+<button>%(sign_in)s</button></form><p class="langs">%(langs)s</p></main></body></html>"""
+LANG_COOKIE_AGE = 365 * 24 * 3600
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -84,13 +88,25 @@ class Handler(BaseHTTPRequestHandler):
     def _json(self, obj, code=200):
         self._send(code, json.dumps(obj, ensure_ascii=False), "application/json; charset=utf-8")
 
-    def _authed(self):
-        c = self.headers.get("Cookie", "")
-        for part in c.split(";"):
+    def _cookie(self, name):
+        for part in self.headers.get("Cookie", "").split(";"):
             k, _, v = part.strip().partition("=")
-            if k == "sid" and auth.valid_cookie(v):
-                return True
-        return False
+            if k == name:
+                return v
+        return ""
+
+    def _authed(self):
+        return auth.valid_cookie(self._cookie("sid"))
+
+    def _query_lang(self):
+        return urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("lang", [""])[0]
+
+    def _lang(self):
+        """The language to answer in: `?lang=` first, then the `lang` cookie, then the browser's own preference."""
+        return i18n.pick(self._query_lang() or self._cookie("lang"), self.headers.get("Accept-Language", ""))
+
+    def _error(self, code, text, **params):
+        self._json({"error": t(self._lang(), text, **params)}, code)
 
     def _same_origin(self):
         """Protection against requests coming from another site: `Sec-Fetch-Site` (sent by all recent browsers),
@@ -114,15 +130,19 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/login":
             return self._login_page()
         if not self._authed():
-            return self._redirect("/login") if not path.startswith("/api/") else self._json({"error": "sign-in required"}, 401)
+            return self._redirect("/login") if not path.startswith("/api/") else self._error(401, "sign-in required")
         if path == "/":
             return self._file("index.html")
         if path.startswith("/static/"):
             return self._file(path[len("/static/"):])
         if path == "/api/data":
-            return self._json(engine.compute(store.connect(), store.DATA))
+            return self._json(engine.compute(store.connect(), store.DATA, self._lang()))
+        if path == "/api/i18n":
+            lang = self._lang()
+            return self._json({"lang": lang, "messages": i18n.messages(lang)})
         if path == "/api/status":
-            return self._json({k: job[k] for k in ("running", "step", "notes")} | {"done": job.get("done", 0)})
+            lang, step = self._lang(), job["step"]
+            return self._json({"running": job["running"], "step": t(lang, step[0], **step[1]) if step else "", "notes": job["notes"], "done": job.get("done", 0)})
         self._send(404, "not found")
 
     def _file(self, name):
@@ -131,10 +151,19 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(404, "not found")
         self._send(200, p.read_bytes(), TYPES[p.suffix])
 
-    def _login_page(self, msg=""):
+    def _login_html(self, text):
+        lang = self._lang()
+        current = ' aria-current="true"'
+        links = " · ".join(f'<a href="/login?lang={code}"{current if code == lang else ""}>{html.escape(name)}</a>' for code, name in i18n.LANGUAGES.items())
+        return LOGIN % {"lang": lang, "msg": html.escape(t(lang, text)), "user": t(lang, "Username"), "password": t(lang, "Password"),
+                        "sign_in": t(lang, "Sign in"), "langs": links}
+
+    def _login_page(self, text=""):
         if not auth.configured():
-            msg = "No account: run \"docker exec -it foliolib python main.py passwd\"."
-        self._send(200, LOGIN % {"msg": msg or "Private access."}, "text/html; charset=utf-8")
+            text = "No account: run \"docker exec -it foliolib python main.py passwd\"."
+        chosen = self._query_lang()      # an explicit choice made with the links of the page is remembered
+        extra = {"Set-Cookie": f"lang={chosen}; Path=/; Max-Age={LANG_COOKIE_AGE}; SameSite=Strict"} if chosen in i18n.LANGUAGES else None
+        self._send(200, self._login_html(text or "Private access."), "text/html; charset=utf-8", extra)
 
     # ----- POST
     def do_POST(self):
@@ -148,7 +177,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/login":
             return self._login(body)
         if not self._authed():
-            return self._json({"error": "sign-in required"}, 401)
+            return self._error(401, "sign-in required")
         db = store.connect()
         if path == "/logout":
             return self._redirect("/login", {"Set-Cookie": "sid=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Strict"})
@@ -156,19 +185,19 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"started": run_refresh()})
         if path == "/api/upload":
             if store.meta_get(db, "demo"):
-                return self._json({"error": "Demo data is loaded: erase it first (Data Management) before importing your own files."}, 400)
+                return self._error(400, "Demo data is loaded: erase it first (Data Management) before importing your own files.")
             name = urllib.parse.unquote(self.headers.get("X-Filename", "export.csv"))[:120]
             try:
                 kind, recs = parsers.parse(body)
             except ValueError as e:
-                return self._json({"error": str(e)}, 400)
+                return self._json({"error": e.text(self._lang()) if isinstance(e, i18n.Msg) else str(e)}, 400)
             total, new = store.add_file(db, name, kind, recs, store.save_raw(body))
             return self._json({"kind": kind, "lines": total, "new": new, "started": run_refresh()})
         if path == "/api/alias":
             d = json.loads(body or b"{}")
             label, isin = " ".join(str(d.get("label", "")).lower().split()), str(d.get("isin", "")).strip().upper()
             if not label or len(isin) != 12:
-                return self._json({"error": "Invalid ISIN (12 characters)"}, 400)
+                return self._error(400, "Invalid ISIN (12 characters)")
             db.execute("INSERT OR REPLACE INTO aliases(label,isin) VALUES(?,?)", (label, isin))
             db.commit()
             return self._json({"ok": True, "started": run_refresh()})
@@ -176,13 +205,13 @@ class Handler(BaseHTTPRequestHandler):
             d = json.loads(body or b"{}")
             isin, sym = str(d.get("isin", "")).strip().upper(), str(d.get("symbol", "")).strip().upper()
             if len(isin) != 12 or not sym or len(sym) > 20:
-                return self._json({"error": "Invalid ISIN or symbol"}, 400)
+                return self._error(400, "Invalid ISIN or symbol")
             db.execute("INSERT INTO instruments(isin,symbol,manual,tried) VALUES(?,?,1,0) ON CONFLICT(isin) DO UPDATE SET symbol=?, manual=1", (isin, sym, sym))
             db.commit()
             return self._json({"ok": True, "started": run_refresh()})
         if path == "/api/wipe":
             if json.loads(body or b"{}").get("confirm") != "WIPE":
-                return self._json({"error": "confirmation missing"}, 400)
+                return self._error(400, "confirmation missing")
             store.wipe(db)
             return self._json({"ok": True})
         self._send(404, "not found")
@@ -191,10 +220,10 @@ class Handler(BaseHTTPRequestHandler):
         form = urllib.parse.parse_qs(body.decode("utf-8", "replace"))
         user, pw = (form.get("user") or [""])[0], (form.get("password") or [""])[0]
         if auth.locked():
-            return self._send(429, LOGIN % {"msg": "Too many attempts: try again in a few minutes."}, "text/html; charset=utf-8")
+            return self._send(429, self._login_html("Too many attempts: try again in a few minutes."), "text/html; charset=utf-8")
         if auth.check(user, pw):
             return self._redirect("/", {"Set-Cookie": f"sid={auth.make_cookie()}; Max-Age={auth.SESSION_SECONDS}; Path=/; HttpOnly; Secure; SameSite=Strict"})
-        self._send(401, LOGIN % {"msg": "Incorrect username or password."}, "text/html; charset=utf-8")
+        self._send(401, self._login_html("Incorrect username or password."), "text/html; charset=utf-8")
 
     def do_PUT(self):
         self._send(405, "method not allowed")

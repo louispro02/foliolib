@@ -19,6 +19,8 @@ import hashlib
 import importlib
 import pkgutil
 
+from i18n import Msg
+
 from .base import BaseParser, fr_num, iso, rows  # noqa: F401  (re-exported for callers and tests)
 
 # Parser version: bump it whenever the output for a file type changes (see store.migrate, which re-reads the preserved files).
@@ -57,7 +59,7 @@ def decode(raw):
             return raw.decode(enc)
         except UnicodeDecodeError:
             continue
-    raise ValueError("unreadable encoding")
+    raise Msg("unreadable encoding")
 
 
 def detect(text):
@@ -87,8 +89,8 @@ def parse(raw):
     text = decode(raw)
     kind = detect(text)
     if not kind:
-        raise ValueError("unrecognized format (expected: DEGIRO Transactions, Account or Portfolio export; Fortuneo history or account)")
+        raise Msg("unrecognized format (expected: a DEGIRO Transactions, Account or Portfolio export, a Fortuneo history or account export, or a FolioLib generic CSV)")
     recs = keyed(kind, REGISTRY[kind].parse(text))
     if not recs:
-        raise ValueError("no usable row in this file")
+        raise Msg("no usable row in this file")
     return kind, recs

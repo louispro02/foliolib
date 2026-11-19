@@ -53,6 +53,7 @@ python3 main.py serve --port 8090
 | `app/store.py` | SQLite storage and parser migration |
 | `app/auth.py` | Password hashing, signed session cookie, login throttling |
 | `app/demo.py` | The synthetic demo portfolio |
+| `app/i18n/` | The languages of the interface: one file per language |
 | `app/static/` | The page: `index.html`, `app.js`, CSS and self-hosted fonts |
 | `docs/examples/` | The tested broker example used below |
 
@@ -182,6 +183,38 @@ file that was not preserved cannot be re-read: the page then asks the user to up
 forget to bump the version, existing users keep the old, wrong records.
 
 Adding a **new** file type does not need a bump: nothing was imported with it before.
+
+## Translate FolioLib
+
+English is the source language. Every text is written in English where it is used, and a language file maps it to its
+translation, so a text that has no translation yet simply shows in English. There is no key to invent.
+
+**Adding a language** (say Spanish, `es`):
+
+1. Copy `app/i18n/fr.py` to `app/i18n/es.py` and translate the values: the keys, which are the English texts, stay as they are.
+2. Add `"es": "Español"` to `LANGUAGES` in `app/i18n/__init__.py`, and `es` to `LANGS` at the top of `app/static/app.js`.
+3. Run the tests: they check every language of `LANGUAGES`, list the texts that are still missing, and check that the page
+   and the server offer the same languages.
+
+**Writing a text** that will be translated:
+
+| Where | How |
+| --- | --- |
+| `app/static/index.html` | Put `data-t` on the element (its own text is the English source) and `data-t-attrs="aria-label,placeholder"` for the attributes |
+| `app/static/app.js` | `tt("English text {name}", { name: value })`. For a label that is translated later, where it is displayed: `N_("English text")` |
+| Python (server) | `t(lang, "English text {name}", name=value)`; for an error shown to the user, `raise Msg("English text {name}", name=value)` |
+
+Rules that make a translation possible:
+
+- **Write whole sentences with placeholders, never fragments to glue together.** `tt("{n} min ago", { n })` can become
+  `il y a {n} min`; `n + " min ago"` cannot, because the words of a sentence do not come in the same order in every language.
+- **Plurals:** use `plural(n, "{n} year", "{n} years")` in the page. Spell numbers and dates with the helpers that format
+  them for the language (`num`, `eur`, `pct`, `longDate` in the page, `number()` in Python), never by hand.
+- A placeholder must be written the same way in the English text and in every translation: a test checks it.
+- Messages of the command line and the logs stay in English: they are addressed to whoever runs the server.
+
+A language file may define `typography(text)`, applied once when it is loaded: French uses it to put no-break spaces before
+`%` and `:`, so contributors can type ordinary spaces.
 
 ## Pull requests
 

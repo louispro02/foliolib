@@ -6,19 +6,21 @@ No network access here: prices and exchange rates come through the functions pas
 from collections import defaultdict
 from datetime import date as _date
 
+from i18n import t
+
 # Display names of the brokers we know; any other broker is shown with its key, title-cased.
 ACCOUNTS = {"degiro": "DEGIRO (brokerage)", "fortuneo": "Fortuneo (PEA)"}
 SHORT_NAMES = {"degiro": "DEGIRO", "fortuneo": "Fortuneo PEA"}
 
 
-def account_label(broker):
-    """Full display name of a broker's account."""
-    return ACCOUNTS.get(broker) or broker.replace("_", " ").title()
+def account_label(broker, lang="en"):
+    """Full display name of a broker's account, in `lang`."""
+    return t(lang, ACCOUNTS[broker]) if broker in ACCOUNTS else broker.replace("_", " ").title()
 
 
-def account_short(broker):
-    """Short name, for buttons and table cells."""
-    return SHORT_NAMES.get(broker) or broker.replace("_", " ").title()
+def account_short(broker, lang="en"):
+    """Short name, for buttons and table cells, in `lang`."""
+    return t(lang, SHORT_NAMES[broker]) if broker in SHORT_NAMES else broker.replace("_", " ").title()
 
 # Fortuneo labels (the export has no ISIN) -> ISIN. Users map them from the page; defaults can be added here.
 FORTUNEO_SEED = {}
@@ -184,7 +186,8 @@ def build(records, aliases=None, fx=None):
         elif len(qs) == 2 and abs(p.qty - qs[0]) < 1e-9:
             p.qty = qs[1]
         else:
-            warnings.append(f"Share exchange \"{legs[0]['name']}\" on {day} not applied (quantities {qs}, held {p.qty:g}): check the export.")
+            warnings.append(("Share exchange \"{name}\" on {day} not applied (quantities {qs}, held {held}): check the export.",
+                             {"name": legs[0]["name"], "day": day, "qs": qs, "held": f"{p.qty:g}"}))     # (English text, parameters)
 
     for r in records:
         if r["type"] == "f_cash":

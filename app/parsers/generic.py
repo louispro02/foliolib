@@ -11,6 +11,8 @@ import math
 import re
 from datetime import datetime
 
+from i18n import Msg, RowErrors
+
 from .base import BaseParser, rows
 
 REQUIRED = ("date", "type", "account", "isin", "name", "quantity", "price", "amount", "currency", "fees")
@@ -36,10 +38,12 @@ def _number(text, field, decimal_comma):
     try:
         value = float(s)
     except ValueError:
-        hint = "" if decimal_comma else " (use a dot as the decimal separator and no thousands separator)"
-        raise ValueError(f"{field} {text!r} is not a number{hint}") from None
+        if decimal_comma:
+            raise Msg("{field} {value} is not a number", field=field, value=repr(text)) from None
+        raise Msg("{field} {value} is not a number (use a dot as the decimal separator and no thousands separator)",
+                  field=field, value=repr(text)) from None
     if not math.isfinite(value):
-        raise ValueError(f"{field} {text!r} is not a number")
+        raise Msg("{field} {value} is not a number", field=field, value=repr(text))
     return value
 
 
@@ -47,7 +51,7 @@ def _date(text):
     try:
         return datetime.strptime(text, "%Y-%m-%d").date().isoformat()
     except ValueError:
-        raise ValueError(f"date {text!r} must be written YYYY-MM-DD") from None
+        raise Msg("date {value} must be written YYYY-MM-DD", value=repr(text)) from None
 
 
 def _account(text):
@@ -85,8 +89,8 @@ class GenericCsv(BaseParser):
 
             try:
                 recs, delta = cls._row(cell, comma)
-            except ValueError as e:
-                errors.append(f"row {n}: {e}")
+            except Msg as e:
+                errors.append((n, e))
                 continue
             rec = recs[0]
             if rec["type"] == "snapshot_cash":
@@ -97,8 +101,7 @@ class GenericCsv(BaseParser):
             if delta is not None:
                 cash[rec["broker"]] = cash.get(rec["broker"], 0.0) + delta
         if errors:
-            more = f" (and {len(errors) - MAX_ERRORS} more)" if len(errors) > MAX_ERRORS else ""
-            raise ValueError("; ".join(errors[:MAX_ERRORS]) + more)
+            raise RowErrors(errors, MAX_ERRORS)
         # Without a stated balance, rebuild the cash from the activity: it is only right if the file holds the account's whole
         # history. A negative result means deposits are missing, so no balance is better than a wrong one.
         out += [balances[b] for b in sorted(balances)]
@@ -112,28 +115,28 @@ class GenericCsv(BaseParser):
         """One CSV row -> (records, change of the account's cash in euros, or None if it is not rebuildable)."""
         what = cell("type").lower().replace(" ", "_").replace("-", "_")
         if what not in TYPES:
-            raise ValueError(f"unknown type {cell('type')!r} (expected one of: {', '.join(TYPES)})")
+            raise Msg("unknown type {value} (expected one of: {types})", value=repr(cell("type")), types=", ".join(TYPES))
         broker, day = _account(cell("account")), _date(cell("date"))
         isin, name, ccy = cell("isin").upper(), cell("name"), (cell("currency") or "EUR").upper()
         if not re.fullmatch(r"[A-Z]{3}", ccy):
-            raise ValueError(f"currency {cell('currency')!r} is not a 3-letter code: a number written with a comma was probably split "
-                             "in two columns (use a dot as the decimal separator, or put the number in quotes)")
+            raise Msg("currency {value} is not a 3-letter code: a number written with a comma was probably split in two columns "
+                      "(use a dot as the decimal separator, or put the number in quotes)", value=repr(cell("currency")))
 
         def num(field, required=True):
             raw = cell(field)
             if not raw:
                 if required:
-                    raise ValueError(f"{field} is required for a {what}")
+                    raise Msg("{field} is required for a {what}", field=field, what=what)
                 return None
             return _number(raw, field, comma)
 
         def need_isin():
             if len(isin) != 12 or not isin.isalnum():
-                raise ValueError(f"isin {cell('isin')!r} must be 12 letters or digits (required for a {what})")
+                raise Msg("isin {value} must be 12 letters or digits (required for a {what})", value=repr(cell("isin")), what=what)
 
         def need_euro():
             if ccy != "EUR":
-                raise ValueError(f"a {what} must be in euros: convert it first (currency is {ccy})")
+                raise Msg("a {what} must be in euros: convert it first (currency is {currency})", what=what, currency=ccy)
 
         base = {"broker": broker, "date": day, "isin": isin, "name": name, "ccy": ccy}
         if what in ("deposit", "withdrawal"):
@@ -148,11 +151,11 @@ class GenericCsv(BaseParser):
             need_euro()
             qty, fees = abs(num("quantity")), abs(num("fees", required=False) or 0.0)
             if qty <= 0:
-                raise ValueError("quantity must be greater than zero")
+                raise Msg("quantity must be greater than zero")
             price = num("price", required=False)
             gross = abs(num("amount")) if cell("amount") else qty * (price or 0.0)
             if not gross:
-                raise ValueError(f"a {what} needs an amount, or a price and a quantity")
+                raise Msg("a {what} needs an amount, or a price and a quantity", what=what)
             sign = 1 if what == "buy" else -1
             cash_moved = -(gross + fees) if what == "buy" else gross - fees
             rec = {**base, "type": "trade", "time": "", "name": name or isin, "qty": sign * qty, "price": price or gross / qty,
@@ -161,10 +164,10 @@ class GenericCsv(BaseParser):
         if what in ("exchange_out", "exchange_in"):
             need_isin()
             if not name:
-                raise ValueError("an exchange needs the same name on both legs, to pair them")
+                raise Msg("an exchange needs the same name on both legs, to pair them")
             qty = abs(num("quantity"))
             if qty <= 0:
-                raise ValueError("quantity must be greater than zero")
+                raise Msg("quantity must be greater than zero")
             rec = {**base, "type": "trade", "time": "", "qty": -qty if what == "exchange_out" else qty, "price": None,
                    "price_ccy": "EUR", "amount_eur": 0.0, "fees_eur": 0.0, "autofx_eur": 0.0, "corporate": True}
             return [rec], 0.0

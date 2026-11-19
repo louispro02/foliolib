@@ -27,6 +27,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "app"))
 import auth
 import demo
 import engine
+import i18n
+import i18n_scan
 import ledger
 import main
 import parsers
@@ -519,6 +521,102 @@ class GenericCsvFormat(unittest.TestCase):
         self.assertIn("no usable row", self.error(self.table()))
 
 
+class Languages(unittest.TestCase):
+    """English is the source language; French is a complete translation of it. See app/i18n/."""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp(prefix="foliolib-lang-", dir=TMP))
+        self.db = store.connect(self.dir / "lang.sqlite")
+        demo.load(self.db)
+
+    def tearDown(self):
+        self.db.close()
+
+    OTHER_LANGUAGES = [code for code in i18n.LANGUAGES if code != i18n.DEFAULT]
+
+    def test_every_text_has_a_translation_in_every_language_and_none_is_left_over(self):
+        used = set(i18n_scan.all_keys())
+        for code in self.OTHER_LANGUAGES:
+            translated = set(i18n.messages(code))
+            self.assertEqual(sorted(used - translated), [], f"texts with no translation in {code}")
+            self.assertEqual(sorted(translated - used), [], f"translations in {code} of texts that no longer exist")
+
+    def test_placeholders_are_the_same_in_every_language(self):
+        names = lambda text: sorted(re.findall(r"\{(\w+)\}", text))      # noqa: E731
+        for code in self.OTHER_LANGUAGES:
+            for english, translation in i18n.messages(code).items():
+                self.assertEqual(names(english), names(translation), f"{code}: {english}")
+
+    def test_the_page_offers_the_languages_the_server_has(self):
+        declared = re.search(r"const LANGS = \{(.*?)\};", (ROOT / "app" / "static" / "app.js").read_text(encoding="utf-8")).group(1)
+        self.assertEqual(dict(re.findall(r'(\w+): "([^"]+)"', declared)), i18n.LANGUAGES)
+
+    def test_a_text_without_translation_is_shown_in_english(self):
+        self.assertEqual(i18n.t("fr", "a text nobody translated"), "a text nobody translated")
+        self.assertEqual(i18n.t("de", "Starting"), "Starting")                     # an unknown language falls back too
+        self.assertEqual(i18n.t("fr", "Starting"), "Démarrage")
+        self.assertEqual(i18n.t("fr", "Prices {n}/{total}", n=2, total=9), "Cours 2/9")
+
+    def test_the_language_is_chosen_from_the_explicit_choice_then_the_browser(self):
+        pick = i18n.pick
+        self.assertEqual(pick("fr", ""), "fr")
+        self.assertEqual(pick("fr", "en-US,en;q=0.9"), "fr")                       # an explicit choice wins over the browser
+        self.assertEqual(pick("", "fr-FR,fr;q=0.9,en;q=0.8"), "fr")
+        self.assertEqual(pick("", "en;q=0.4, fr;q=0.9"), "fr")                    # quality values are respected
+        self.assertEqual(pick("", "de-DE,de;q=0.9,en;q=0.5"), "en")               # the first language we know
+        self.assertEqual(pick("", "de, it"), "en")
+        self.assertEqual(pick("", ""), "en")
+        self.assertEqual(pick("../etc/passwd", "fr"), "fr")                       # a bad value is ignored, never imported
+
+    def test_french_numbers_in_sentences_use_a_decimal_comma(self):
+        self.assertEqual(i18n.number("fr", 81.34, 1), "81,3")
+        self.assertEqual(i18n.number("en", 81.34, 1), "81.3")
+        self.assertEqual(i18n.number("fr", -45.2, 0, signed=True), "-45")
+        self.assertEqual(i18n.number("en", 7, 0, signed=True), "+7")
+
+    def test_lists_are_joined_with_the_word_of_the_language(self):
+        self.assertEqual(i18n.join_and("en", ["a", "b", "c"]), "a, b and c")
+        self.assertEqual(i18n.join_and("fr", ["a", "b", "c"]), "a, b et c")
+        self.assertEqual(i18n.join_and("fr", ["a"]), "a")
+
+    def test_an_error_can_be_shown_in_either_language(self):
+        err = i18n.Msg("date {value} must be written YYYY-MM-DD", value="'x'")
+        self.assertEqual(str(err), "date 'x' must be written YYYY-MM-DD")
+        self.assertEqual(err.text("fr"), "la date 'x' doit s'écrire AAAA-MM-JJ")
+        with self.assertRaises(i18n.Msg) as caught:
+            parsers.parse("date,type,account,isin,name,quantity,price,amount,currency,fees,note\n2025-13-40,deposit,Main,,,,,5,EUR,,\n".encode())
+        self.assertEqual(caught.exception.text("fr"), "ligne 2\u00a0: la date '2025-13-40' doit s'écrire AAAA-MM-JJ")      # a no-break space before the colon
+        self.assertEqual(str(caught.exception), "row 2: date '2025-13-40' must be written YYYY-MM-DD")
+
+    def test_row_errors_beyond_the_limit_are_counted_in_both_languages(self):
+        rows = "\n".join(["2025-01-02,gift,Main,,,,,1,EUR,,"] * 7)
+        with self.assertRaises(i18n.Msg) as caught:
+            parsers.parse(("date,type,account,isin,name,quantity,price,amount,currency,fees,note\n" + rows + "\n").encode())
+        self.assertTrue(caught.exception.text("en").endswith("(and 2 more)"))
+        self.assertTrue(caught.exception.text("fr").endswith("(et 2 de plus)"))
+
+    def test_the_engine_speaks_french_when_asked_and_english_otherwise(self):
+        fr, en = engine.compute(self.db, self.dir, "fr"), engine.compute(self.db, self.dir)
+        self.assertEqual(en, engine.compute(self.db, self.dir, "en"))               # English is the default
+        self.assertEqual(fr["warnings"][0], "Mode démo\u00a0: toutes les opérations et tous les cours de cette page sont fictifs.")
+        self.assertIn("Marchés émergents", [b["label"] for b in fr["compare"]["benchmarks"]])
+        self.assertIn("Emerging Markets", [b["label"] for b in en["compare"]["benchmarks"]])
+        self.assertIn("1 jour", [p["label"] for p in fr["perf"]["all"]["periods"]])
+        self.assertIn("Courtage", [f["label"] for f in fr["costs"]["fees"]])
+        self.assertEqual(fr["accounts"][0]["account"], "DEGIRO (compte-titres)")
+        self.assertEqual({p["category"] for p in fr["positions"]}, {"ETF", "Action"})
+        self.assertEqual({p["category"] for p in en["positions"]}, {"ETF", "Stock"})
+        cash = next(w["text"] for w in fr["watch"] if w["kind"] == "cash")
+        self.assertRegex(cash, r"^Liquidités\u00a0: \d+,\d\u202f% du total\.$")          # French wording, a decimal comma and no-break spaces
+        self.assertRegex(next(w["text"] for w in en["watch"] if w["kind"] == "cash"), r"^Cash: \d+\.\d % of the total\.$")
+
+    def test_what_the_page_needs_to_compare_does_not_change_with_the_language(self):
+        fr, en = engine.compute(self.db, self.dir, "fr"), engine.compute(self.db, self.dir)
+        self.assertEqual([p["source"] for p in fr["positions"]], [p["source"] for p in en["positions"]])      # codes stay codes
+        self.assertEqual([a["key"] for a in fr["accounts"]], [a["key"] for a in en["accounts"]])
+        self.assertEqual(fr["kpi"], en["kpi"])                                                                  # and so do the numbers
+
+
 class Docs(unittest.TestCase):
     """The documentation is part of the product: keep it from drifting away from the code."""
 
@@ -700,6 +798,61 @@ class Server(unittest.TestCase):
                              {"Content-Type": "application/x-www-form-urlencoded"})
         self.assertEqual(st, 303)
         return {"Cookie": hd["Set-Cookie"].split(";")[0]}
+
+    def test_the_login_page_follows_the_browser_and_the_choice_made_on_it(self):
+        st, hd, body = self.req("GET", "/login")
+        self.assertIn(b'<html lang="en">', body)
+        self.assertIn(b"Sign in", body)
+        self.assertNotIn("Set-Cookie", hd)                                           # nothing is stored until the visitor chooses
+        st, hd, body = self.req("GET", "/login", headers={"Accept-Language": "fr-FR,fr;q=0.9"})
+        self.assertIn('<html lang="fr">'.encode(), body)
+        self.assertIn("Se connecter".encode(), body)
+        st, hd, body = self.req("GET", "/login?lang=fr")
+        self.assertTrue(hd["Set-Cookie"].startswith("lang=fr;"))
+        self.assertIn("Identifiant".encode(), body)
+        self.assertIn(b'href="/login?lang=en"', body)                                 # both languages are offered
+        self.assertIn(b'aria-current="true">Fran', body)                              # and the current one is marked
+        st, hd, body = self.req("GET", "/login", headers={"Cookie": "lang=en", "Accept-Language": "fr"})
+        self.assertIn(b"Sign in", body)                                               # the choice beats the browser's preference
+        st, hd, body = self.req("GET", "/login?lang=%3Cscript%3E")
+        self.assertNotIn("Set-Cookie", hd)                                            # an invalid choice is ignored
+
+    def test_a_wrong_password_is_explained_in_the_language_of_the_visitor(self):
+        auth._fails.clear()
+        st, _, body = self.req("POST", "/login", urllib.parse.urlencode({"user": "admin", "password": "nope"}),
+                               {"Content-Type": "application/x-www-form-urlencoded", "Cookie": "lang=fr"})
+        self.assertEqual(st, 401)
+        self.assertIn("Identifiant ou mot de passe incorrect.".encode(), body)
+        auth._fails.clear()
+
+    def test_the_page_downloads_the_messages_of_its_language(self):
+        self.assertEqual(self.req("GET", "/api/i18n")[0], 401)                        # behind the sign-in, like the rest
+        ck = self.cookie()
+        fr = json.loads(self.req("GET", "/api/i18n", headers={**ck, "Cookie": ck["Cookie"] + "; lang=fr"})[2])
+        self.assertEqual((fr["lang"], fr["messages"]["Refresh"]), ("fr", "Actualiser"))
+        en = json.loads(self.req("GET", "/api/i18n", headers={**ck, "Accept-Language": "en-GB"})[2])
+        self.assertEqual((en["lang"], en["messages"]), ("en", {}))                    # English is the source: nothing to download
+        by_query = json.loads(self.req("GET", "/api/i18n?lang=fr", headers=ck)[2])
+        self.assertEqual(by_query["lang"], "fr")
+
+    def test_errors_of_the_api_are_translated(self):
+        ck = {**self.cookie()}
+        fr = {**ck, "Cookie": ck["Cookie"] + "; lang=fr", "Content-Type": "application/json"}
+        self.assertEqual(json.loads(self.req("POST", "/api/wipe", "{}", fr)[2])["error"], "confirmation manquante")
+        self.assertEqual(json.loads(self.req("POST", "/api/wipe", "{}", {**fr, "Cookie": ck["Cookie"]})[2])["error"], "confirmation missing")
+        bad = self.req("POST", "/api/upload", b"a,b\n1,2\n", {**fr, "Content-Type": "application/octet-stream"})
+        self.assertEqual(bad[0], 400)
+        self.assertTrue(json.loads(bad[2])["error"].startswith("format non reconnu"))
+
+    def test_the_data_is_sent_in_the_language_of_the_visitor(self):
+        store.wipe(store.connect())                                                   # other tests leave data in the shared database
+        demo.load(store.connect())
+        ck = self.cookie()
+        fr = json.loads(self.req("GET", "/api/data", headers={**ck, "Cookie": ck["Cookie"] + "; lang=fr"})[2])
+        self.assertTrue(fr["warnings"][0].startswith("Mode démo"))
+        en = json.loads(self.req("GET", "/api/data", headers=ck)[2])
+        self.assertTrue(en["warnings"][0].startswith("Demo mode"))
+        self.req("POST", "/api/wipe", json.dumps({"confirm": "WIPE"}), {**ck, "Content-Type": "application/json"})
 
     def test_demo_blocks_import_until_wiped(self):
         demo.load(store.connect())
