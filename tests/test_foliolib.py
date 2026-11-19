@@ -567,6 +567,17 @@ class Docs(unittest.TestCase):
         for page in ("README.md", "CONTRIBUTING.md"):
             self.assertIn("docs/generic-csv.md", self.read(page))
 
+    def test_the_parser_request_form_is_complete_and_linked(self):
+        form = self.read(".github/ISSUE_TEMPLATE/parser-request.yml")
+        for needed in ("did not paste or attach the original export", "render: text", "type: checkboxes", "CSV files only"):
+            self.assertIn(needed, form)
+        self.assertGreaterEqual(form.count("required: true"), 8)                  # five questions and three privacy confirmations
+        for page in ("README.md", "CONTRIBUTING.md"):
+            self.assertIn("issues/new?template=parser-request.yml", self.read(page))
+        for name in ("parser-request.yml", "config.yml"):                            # every file the form links to exists
+            for path in re.findall(r"/blob/main/([^)\s#]+)", self.read(f".github/ISSUE_TEMPLATE/{name}")):
+                self.assertTrue((ROOT / path).exists(), f"{name} links to a missing file: {path}")
+
     def test_license_is_the_agpl(self):
         text = self.read("LICENSE")
         self.assertTrue(text.lstrip().startswith("GNU AFFERO GENERAL PUBLIC LICENSE"))

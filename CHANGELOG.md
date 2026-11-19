@@ -14,6 +14,8 @@ First public release. Replace "unreleased" with the release date when tagging.
 - **Import** of DEGIRO exports (Transactions, Account, Portfolio) and Fortuneo exports (operations history, cash account) by
   drag and drop, in their French-language form. Records are de-duplicated by a SHA-256 of their content, so overlapping
   exports never count anything twice. Raw files are kept, so a parser fix re-reads everything without a new upload.
+- **Parser request form** on GitHub: asks for an anonymized sample of a broker's export, with the rules to anonymize it, so
+  that new parsers start from real file formats without exposing anyone's data.
 - **Modular parsers**: one module per broker in `app/parsers/`, discovered automatically. A new broker needs a parser and no
   other change. A tested worked example and a step-by-step guide are in `CONTRIBUTING.md`.
 - **Generic CSV import**: a documented format (`docs/generic-csv.md`) that any broker's data can be converted into, with

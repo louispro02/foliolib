@@ -59,7 +59,8 @@ python3 main.py serve --port 8090
 ## Add support for your broker
 
 Not a programmer, or your broker only gives PDF statements? You do not need a parser: convert your data to the
-[generic CSV](docs/generic-csv.md) and drop it on the page. A parser is for **native** support of a broker's own export.
+[generic CSV](docs/generic-csv.md) and drop it on the page. A parser is for **native** support of a broker's own export. To ask for one without writing it, open a
+[parser request](https://github.com/louispro02/foliolib/issues/new?template=parser-request.yml) with an anonymized sample.
 
 A broker is supported by **one file** in `app/parsers/`. It is found automatically: nothing needs to be registered, and
 the calculation core and the page need no change. The tests prove it: one drops the example below into a copy of the
@@ -136,6 +137,18 @@ class AcmeActivity(BaseParser):
    them has the right invested amount, positions and gain.
 5. **Optional polish.** Give the broker a display name in `ledger.ACCOUNTS` and `ledger.SHORT_NAMES` (otherwise its key is
    shown, title-cased), and a label for each file type in `KINDS` in `app/static/app.js` (otherwise the raw `kind` is shown).
+
+### Turning a parser request into a parser
+
+A request is only as good as its sample, and the sample is public. Before anything else:
+
+1. **Check it is really anonymized.** If someone pasted a real export, **editing the text is not enough**: GitHub keeps the
+   previous versions visible in the edit history. Delete the issue or the comment, ask the author to submit a clean sample, and
+   suggest they change any identifier that leaked.
+2. **Rebuild it as a synthetic fixture.** Never commit the sample as given: invent every name, ISIN and amount, keeping the
+   headers, separators, number and date formats, and the wording of each operation exactly.
+3. **Write the parser from the fixture** and test it as above. When the broker's real file differs from what the sample
+   suggested, ask the author to check a new anonymized line rather than guessing.
 
 ### Things that trip people up
 

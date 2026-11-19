@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability (private)
+    url: https://github.com/louispro02/foliolib/security/advisories/new
+    about: Please do not open a public issue for a vulnerability. Report it privately here.
+  - name: Your broker is not supported yet? Use the generic CSV
+    url: https://github.com/louispro02/foliolib/blob/main/docs/generic-csv.md
+    about: One documented CSV format that works for any broker, while waiting for a dedicated parser.

@@ -99,7 +99,8 @@ FOLIOLIB_DATA=../data python3 main.py serve --port 8080
 
 **No parser for your broker, or only PDF statements?** Convert your data to the [generic CSV](docs/generic-csv.md): one
 documented format that works for any broker. To add native support for a broker, you need one small file and no change anywhere
-else: see [CONTRIBUTING.md](CONTRIBUTING.md#add-support-for-your-broker).
+else: see [CONTRIBUTING.md](CONTRIBUTING.md#add-support-for-your-broker). Or [request a parser](https://github.com/louispro02/foliolib/issues/new?template=parser-request.yml) by sharing an
+anonymized sample of your export.
 
 ## Privacy and security
 
