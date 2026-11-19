@@ -14,6 +14,10 @@ credentials are involved, and there is nothing to install besides Python or Dock
 
 > Every screenshot in this repository uses the built-in **synthetic demo data**. No real account is shown.
 
+> **This project was vibe coded.** It was written with an AI coding assistant, not hand-crafted line by line, and it has not
+> had an independent human code review or security audit. See [How this was built](#how-this-was-built) before you trust it
+> with anything that matters.
+
 ## Why FolioLib
 
 - **Private by design.** Your data stays in a single SQLite file on your machine. There is no telemetry and no account on
@@ -159,6 +163,21 @@ project's own documentation before deciding.
   "Plex" for unmodified distribution; if that matters for your use, replace them with the unmodified upstream releases
   (see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)).
 - Performance indicators start once the securities reach €500, and need at least 20 business days of history.
+
+## How this was built
+
+FolioLib was **vibe coded**: the author described what they wanted, and an AI coding assistant
+([Claude Code](https://claude.com/claude-code)) wrote the code, the tests and this documentation, under the author's direction.
+In practice, that means:
+
+- **What backs it up.** A test suite (run on Python 3.11, 3.12 and 3.13), a linter, and checks that the documentation still
+  matches the code. Calculations were also compared before and after refactors. These catch regressions; they do not prove
+  the financial formulas are right for your situation.
+- **What it lacks.** A line-by-line human review, and a security audit. The sign-in, session and request-checking code
+  (`app/auth.py`, `app/main.py`) is the part that most deserves a careful read before you expose FolioLib to a network you
+  do not control.
+- **What to do with that.** Compare the figures with your broker's statements before relying on them, keep the app
+  behind HTTPS or a VPN, and report anything that looks wrong: issues and pull requests are welcome.
 
 ## Contributing
 
