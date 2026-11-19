@@ -80,7 +80,7 @@ class Parsers(unittest.TestCase):
         self.assertEqual(kinds, ["degiro_transactions", "degiro_account", "degiro_portfolio", "fortuneo_ops", "fortuneo_cash"])
 
     def test_registry_discovers_every_file_type(self):
-        self.assertEqual(sorted(parsers.REGISTRY), ["degiro_account", "degiro_portfolio", "degiro_transactions", "fortuneo_cash", "fortuneo_ops"])
+        self.assertEqual(sorted(parsers.REGISTRY), ["degiro_account", "degiro_portfolio", "degiro_transactions", "foliolib_csv", "fortuneo_cash", "fortuneo_ops"])
         for kind, cls in parsers.REGISTRY.items():
             self.assertTrue(issubclass(cls, parsers.BaseParser))
             self.assertEqual(cls.kind, kind)
@@ -352,6 +352,173 @@ class NewBroker(unittest.TestCase):
         self.assertIn("degiro_account", out)
 
 
+GENERIC_HEADER = "date,type,account,isin,name,quantity,price,amount,currency,fees,note"
+GENERIC_EXAMPLE = ROOT / "docs" / "examples" / "generic-example.csv"
+
+
+class GenericCsvFormat(unittest.TestCase):
+    """The documented FolioLib CSV: one format any broker's data can be converted into."""
+
+    def setUp(self):
+        self.db = store.connect(Path(tempfile.mkdtemp(prefix="foliolib-generic-", dir=TMP)) / "generic.sqlite")
+        self.dir = Path(TMP)
+
+    def tearDown(self):
+        self.db.close()
+
+    def table(self, *rows, header=GENERIC_HEADER):
+        return "\n".join([header, *rows]) + "\n"
+
+    def parse(self, text):
+        return parsers.parse(text.encode())
+
+    def error(self, text):
+        with self.assertRaises(ValueError) as caught:
+            self.parse(text)
+        return str(caught.exception)
+
+    def test_header_is_the_same_in_the_code_the_example_and_the_docs(self):
+        from parsers import generic
+        self.assertEqual(generic.HEADER, GENERIC_HEADER)
+        self.assertEqual(GENERIC_EXAMPLE.read_text().splitlines()[0], GENERIC_HEADER)
+
+    def test_only_the_generic_parser_claims_a_generic_file(self):
+        header = GENERIC_HEADER.lower()
+        self.assertEqual([c.kind for c in parsers.REGISTRY.values() if c.detect(header)], ["foliolib_csv"])
+        for other in ("date,type,isin,name,quantity,price,amount",                 # the broker example of CONTRIBUTING.md
+                      "date,heure,produit,code isin,place boursi\u00e8re", "libell\u00e9;op\u00e9ration;place;date;qt\u00e9;prix d'ex\u00e9;montant"):
+            self.assertNotIn("foliolib_csv", [c.kind for c in parsers.REGISTRY.values() if c.detect(other)])
+
+    def test_the_example_builds_a_complete_portfolio(self):
+        kind, recs = parsers.parse(GENERIC_EXAMPLE.read_bytes())
+        self.assertEqual(kind, "foliolib_csv")
+        store.add_file(self.db, "generic-example.csv", kind, recs)
+        for isin, symbol, price in (("IE0000000001", "ETF", 95.0), ("FR0000000030", "BLUE", 250.0)):
+            self.db.execute("INSERT INTO instruments(isin,symbol,ccy,manual,tried) VALUES(?,?,'EUR',1,0)", (isin, symbol))
+            self.db.execute("INSERT INTO quote(symbol,price,ccy,at,source) VALUES(?,?,'EUR',strftime('%s','now'),'yahoo')", (symbol, price))
+        self.db.commit()
+        d = engine.compute(self.db, self.dir)
+        kpi = d["kpi"]
+        self.assertEqual([(a["key"], a["short"]) for a in d["accounts"]], [("brokerage", "Brokerage")])
+        self.assertEqual(kpi["invested"], 2000.0)
+        self.assertAlmostEqual(d["accounts"][0]["cash"], 659.30)            # 2000 - 801.5 - 901.5 + 6.3 - 2.5 + 358.5
+        self.assertAlmostEqual(kpi["value"], 6 * 95 + 4 * 250 + 659.30)
+        self.assertAlmostEqual(kpi["realized"], 37.9)                       # 4 shares sold at 90 over an average cost of 80.15, minus fees
+        self.assertAlmostEqual(kpi["dividends"], 6.3)                       # 9.00 gross - 2.70 withholding
+        positions = {p["isin"]: p for p in d["positions"]}
+        self.assertAlmostEqual(positions["FR0000000030"]["cost"], 901.5)    # the reverse split carries the cost: no fake gain or loss
+        self.assertAlmostEqual(positions["IE0000000001"]["cost"], 480.9)
+        self.assertEqual(d["warnings"], [])
+
+    def test_a_semicolon_file_with_decimal_commas_gives_the_same_records(self):
+        point = self.table("2025-02-03,buy,Main,IE0000000001,WORLD ETF,2.5,80.25,,EUR,1.5,", "2025-02-04,deposit,Main,,,,,1000.5,EUR,,")
+        comma = point.replace(",", ";").replace("2.5;80.25", "2,5;80,25").replace("1.5;", "1,5;").replace("1000.5", "1000,5")
+        self.assertIn(";", comma.splitlines()[0])
+        self.assertEqual([{k: v for k, v in r.items() if k != "key"} for r in self.parse(point)[1]],
+                         [{k: v for k, v in r.items() if k != "key"} for r in self.parse(comma)[1]])
+
+    def test_column_order_and_extra_columns_do_not_matter(self):
+        shuffled = "note,amount,type,date,account,extra,isin,name,quantity,price,currency,fees\n,500,deposit,2025-01-02,Main,x,,,,,EUR,\n"
+        (rec, balance) = self.parse(shuffled)[1][:2]
+        self.assertEqual((rec["type"], rec["amount"], rec["broker"], rec["date"]), ("deposit", 500.0, "main", "2025-01-02"))
+        self.assertEqual(balance["value_eur"], 500.0)
+
+    def test_types_are_forgiving_about_case_and_spaces(self):
+        recs = self.parse(self.table("2025-01-02,Dividend Tax,Main,FR0000000003,BLUE,,,2.5,EUR,,"))[1]
+        self.assertEqual((recs[0]["type"], recs[0]["amount"]), ("dividend_tax", -2.5))
+
+    def test_buy_and_sell_cash_amounts(self):
+        buy, sell = self.parse(self.table("2025-01-03,buy,Main,IE0000000001,ETF,10,80,,EUR,1.5,", "2025-02-03,sell,Main,IE0000000001,ETF,4,,360,EUR,1.5,"))[1][:2]
+        self.assertEqual((buy["qty"], buy["amount_eur"], buy["fees_eur"]), (10.0, -801.5, -1.5))      # price x quantity + fees leave the account
+        self.assertEqual((sell["qty"], sell["amount_eur"], sell["price"]), (-4.0, 358.5, 90.0))         # amount given: the price is derived
+
+    def test_several_accounts_in_one_file(self):
+        text = self.table("2025-01-02,deposit,Broker A,,,,,100,EUR,,", "2025-01-02,deposit,Broker B,,,,,300,EUR,,")
+        d = self.dashboard(text)
+        self.assertEqual({a["key"]: a["invested"] for a in d["accounts"]}, {"broker_a": 100.0, "broker_b": 300.0})
+        self.assertEqual(d["kpi"]["invested"], 400.0)
+
+    def dashboard(self, text):
+        store.add_file(self.db, "g.csv", *self.parse(text))
+        return engine.compute(self.db, self.dir)
+
+    def test_cash_is_rebuilt_from_the_activity_unless_the_file_states_it(self):
+        deposit, buy = "2025-01-02,deposit,Main,,,,,1000,EUR,,", "2025-01-03,buy,Main,IE0000000001,ETF,5,100,,EUR,0,"
+        rebuilt = [r for r in self.parse(self.table(deposit, buy))[1] if r["type"] == "snapshot_cash"]
+        self.assertEqual([r["value_eur"] for r in rebuilt], [500.0])
+        stated = [r for r in self.parse(self.table(deposit, buy, "2025-01-10,cash_balance,Main,,,,,777.7,EUR,,"))[1] if r["type"] == "snapshot_cash"]
+        self.assertEqual([r["value_eur"] for r in stated], [777.7])                      # the stated balance replaces the rebuilt one
+        two = [r for r in self.parse(self.table(deposit, "2025-03-01,cash_balance,Main,,,,,300,EUR,,", "2025-02-01,cash_balance,Main,,,,,200,EUR,,"))[1]
+               if r["type"] == "snapshot_cash"]
+        self.assertEqual([r["value_eur"] for r in two], [300.0])                         # the most recent date wins, not the last row
+
+    def test_no_balance_is_better_than_a_negative_one(self):
+        recs = self.parse(self.table("2025-01-03,buy,Main,IE0000000001,ETF,5,100,,EUR,0,"))[1]       # the deposits are missing
+        self.assertEqual([r["type"] for r in recs], ["trade"])
+
+    def test_a_foreign_currency_dividend_keeps_its_currency_and_stays_out_of_the_rebuilt_cash(self):
+        recs = self.parse(self.table("2025-01-02,deposit,Main,,,,,100,EUR,,", "2025-02-02,dividend,Main,US0000000002,TECH,,,5,USD,,"))[1]
+        dividend = next(r for r in recs if r["type"] == "dividend")
+        self.assertEqual((dividend["ccy"], dividend["amount"]), ("USD", 5.0))
+        self.assertEqual(next(r for r in recs if r["type"] == "snapshot_cash")["value_eur"], 100.0)
+
+    def test_uploading_the_same_file_twice_adds_nothing(self):
+        kind, recs = parsers.parse(GENERIC_EXAMPLE.read_bytes())
+        first = store.add_file(self.db, "a.csv", kind, recs)
+        kind, recs = parsers.parse(GENERIC_EXAMPLE.read_bytes())
+        self.assertEqual((first, store.add_file(self.db, "b.csv", kind, recs)), ((10, 10), (10, 0)))
+
+    def test_errors_say_which_row_and_what_to_fix(self):
+        cases = {
+            "2025-13-40,deposit,Main,,,,,100,EUR,,": "row 2: date '2025-13-40' must be written YYYY-MM-DD",
+            "2025-01-02,gift,Main,,,,,100,EUR,,": "unknown type 'gift'",
+            "2025-01-02,buy,Main,IE0000000001,ETF,1,10,,USD,,": "must be in euros",
+            '2025-01-02,deposit,Main,,,,,"1,000.50",EUR,,': "is not a number",
+            "2025-01-02,deposit,Main,,,,,12,5,EUR,,": "probably split in two columns",
+            "2025-01-02,buy,Main,,ETF,1,10,,EUR,,": "isin '' must be 12 letters or digits",
+            "2025-01-02,buy,Main,IE0000000001,ETF,0,10,,EUR,,": "quantity must be greater than zero",
+            "2025-01-02,buy,Main,IE0000000001,ETF,1,,,EUR,,": "needs an amount, or a price and a quantity",
+            "2025-01-02,deposit,Main,,,,,nan,EUR,,": "is not a number",
+            "2025-01-02,exchange_in,Main,FR0000000030,,4,,,,,": "same name on both legs",
+        }
+        for row, expected in cases.items():
+            self.assertIn(expected, self.error(self.table(row)), row)
+        self.assertIn("use a dot as the decimal separator", self.error(self.table('2025-01-02,deposit,Main,,,,,"12,5",EUR,,')))
+
+    def test_every_bad_row_is_reported_together_up_to_a_limit(self):
+        message = self.error(self.table(*["2025-01-02,gift,Main,,,,,1,EUR,,"] * 8))
+        self.assertEqual(message.count("row "), 5)
+        self.assertTrue(message.endswith("(and 3 more)"))
+
+    def test_rows_of_the_same_day_are_applied_in_file_order(self):
+        buy_sell_buy = self.table("2025-01-02,deposit,Main,,,,,5000,EUR,,", "2025-01-03,buy,Main,IE0000000001,ETF,10,80,,EUR,0,",
+                                  "2025-01-03,sell,Main,IE0000000001,ETF,5,90,,EUR,0,", "2025-01-03,buy,Main,IE0000000001,ETF,10,100,,EUR,0,")
+        buy_buy_sell = self.table("2025-01-02,deposit,Main,,,,,5000,EUR,,", "2025-01-03,buy,Main,IE0000000001,ETF,10,80,,EUR,0,",
+                                  "2025-01-03,buy,Main,IE0000000001,ETF,10,100,,EUR,0,", "2025-01-03,sell,Main,IE0000000001,ETF,5,90,,EUR,0,")
+        self.assertAlmostEqual(self.dashboard(buy_sell_buy)["kpi"]["realized"], 50.0)    # sold at 90 over an average cost of 80
+        self.db.execute("DELETE FROM records"); self.db.execute("DELETE FROM files"); self.db.commit()
+        self.assertAlmostEqual(self.dashboard(buy_buy_sell)["kpi"]["realized"], 0.0)     # sold at 90 over an average cost of 90
+
+    def test_a_transaction_tax_is_counted_under_its_own_heading(self):
+        d = self.dashboard(self.table("2025-01-02,deposit,Main,,,,,1000,EUR,,", "2025-01-03,transaction_tax,Main,,,,,1.2,EUR,,", "2025-01-04,fee,Main,,,,,3,EUR,,"))
+        taxes = {t["label"]: t["eur"] for t in d["costs"]["taxes"]}
+        self.assertEqual(taxes["Financial transaction tax"], 1.2)                        # the plain fee is not counted there
+        self.assertAlmostEqual(d["accounts"][0]["cash"], 1000 - 1.2 - 3)
+
+    def test_a_corrected_row_does_not_replace_the_wrong_one(self):
+        # documented in docs/generic-csv.md: rows are recognized by content, so correcting needs an erase and a new import
+        wrong = self.table("2025-01-02,deposit,Main,,,,,100,EUR,,")
+        store.add_file(self.db, "a.csv", *self.parse(wrong))
+        fixed = self.table("2025-01-02,deposit,Main,,,,,200,EUR,,")
+        self.assertEqual(store.add_file(self.db, "b.csv", *self.parse(fixed)), (2, 2))
+        self.assertEqual(engine.compute(self.db, self.dir)["kpi"]["invested"], 300.0)
+        store.wipe(self.db)
+        self.assertEqual(self.dashboard(fixed)["kpi"]["invested"], 200.0)
+
+    def test_an_empty_file_is_refused(self):
+        self.assertIn("no usable row", self.error(self.table()))
+
+
 class Docs(unittest.TestCase):
     """The documentation is part of the product: keep it from drifting away from the code."""
 
@@ -387,6 +554,18 @@ class Docs(unittest.TestCase):
         self.assertEqual(commands, {"serve", "passwd", "report", "import", "demo"})
         for cmd in commands:
             self.assertIn(f'"{cmd}"', source)
+
+    def test_generic_csv_documentation_matches_the_code(self):
+        from parsers import generic
+        doc = self.read("docs/generic-csv.md")
+        self.assertIn("```text\n" + generic.HEADER + "\n```", doc)
+        for column in (*generic.REQUIRED, "note"):
+            self.assertIn(f"| `{column}` |", doc, f"column {column} is not documented")
+        for kind in generic.TYPES:
+            self.assertIn(f"`{kind}`", doc, f"row type {kind} is not documented")
+        self.assertIn(GENERIC_EXAMPLE.read_text(encoding="utf-8").rstrip("\n"), doc)
+        for page in ("README.md", "CONTRIBUTING.md"):
+            self.assertIn("docs/generic-csv.md", self.read(page))
 
     def test_license_is_the_agpl(self):
         text = self.read("LICENSE")

@@ -406,7 +406,7 @@ function renderLists(d) {
 }
 
 /* ---------------------------------------------------------------- data, import */
-const KINDS = { degiro_transactions: "DEGIRO · transactions", degiro_account: "DEGIRO · account", degiro_portfolio: "DEGIRO · portfolio", fortuneo_ops: "Fortuneo · operations", fortuneo_cash: "Fortuneo · account" };
+const KINDS = { degiro_transactions: "DEGIRO · transactions", degiro_account: "DEGIRO · account", degiro_portfolio: "DEGIRO · portfolio", fortuneo_ops: "Fortuneo · operations", fortuneo_cash: "Fortuneo · account", foliolib_csv: "FolioLib CSV" };
 function renderData(d) {
   const f = $("files"); clear(f);
   for (const x of d.files) f.append(h("div", { class: "row" }, h("span", null, x.name, h("span", { class: "muted" }, " · " + (KINDS[x.kind] || x.kind))), h("b", null, x.new + " new out of " + x.n)));

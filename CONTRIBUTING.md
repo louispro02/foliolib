@@ -58,6 +58,9 @@ python3 main.py serve --port 8090
 
 ## Add support for your broker
 
+Not a programmer, or your broker only gives PDF statements? You do not need a parser: convert your data to the
+[generic CSV](docs/generic-csv.md) and drop it on the page. A parser is for **native** support of a broker's own export.
+
 A broker is supported by **one file** in `app/parsers/`. It is found automatically: nothing needs to be registered, and
 the calculation core and the page need no change. The tests prove it: one drops the example below into a copy of the
 application and checks that it is discovered, another computes a whole portfolio from its records.

@@ -1,0 +1,10 @@
+date,type,account,isin,name,quantity,price,amount,currency,fees,note
+2025-01-02,deposit,Brokerage,,,,,2000,EUR,,First deposit
+2025-01-03,buy,Brokerage,IE0000000001,WORLD ETF,10,80,,EUR,1.5,
+2025-01-03,buy,Brokerage,FR0000000003,BLUE CHIP SA,20,45,,EUR,1.5,
+2025-03-14,dividend,Brokerage,FR0000000003,BLUE CHIP SA,,,9,EUR,,Gross dividend
+2025-03-14,dividend_tax,Brokerage,FR0000000003,BLUE CHIP SA,,,2.7,EUR,,Withholding tax
+2025-04-01,fee,Brokerage,,,,,2.5,EUR,,Exchange connection fee
+2025-06-02,sell,Brokerage,IE0000000001,WORLD ETF,4,90,,EUR,1.5,
+2025-09-01,exchange_out,Brokerage,FR0000000003,BLUE CHIP SA,20,,,,,Reverse split 5 for 1: old shares leave
+2025-09-01,exchange_in,Brokerage,FR0000000030,BLUE CHIP SA,4,,,,,Reverse split 5 for 1: new shares arrive

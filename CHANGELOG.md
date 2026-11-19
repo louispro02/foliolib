@@ -16,6 +16,9 @@ First public release. Replace "unreleased" with the release date when tagging.
   exports never count anything twice. Raw files are kept, so a parser fix re-reads everything without a new upload.
 - **Modular parsers**: one module per broker in `app/parsers/`, discovered automatically. A new broker needs a parser and no
   other change. A tested worked example and a step-by-step guide are in `CONTRIBUTING.md`.
+- **Generic CSV import**: a documented format (`docs/generic-csv.md`) that any broker's data can be converted into, with
+  comma or semicolon separators, clear per-row error messages, and a cash balance rebuilt from the activity when the file does
+  not state one.
 - **Positions and costs**: weighted-average cost with fees included, unrealized and realized gains, dividends net of
   withholding tax, cash balance, brokerage, currency-conversion and connection fees, financial transaction tax, an estimate
   of the latent tax, and a breakdown of where the gain comes from.

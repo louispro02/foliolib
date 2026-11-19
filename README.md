@@ -95,8 +95,11 @@ FOLIOLIB_DATA=../data python3 main.py serve --port 8080
 | --- | --- | --- |
 | DEGIRO | Transactions, Account, Portfolio (CSV) | **French-language exports only** for now |
 | Fortuneo | Operations history and cash account (CSV) | French |
+| Any other broker | The [FolioLib generic CSV](docs/generic-csv.md): a documented format you fill in a spreadsheet or with a small script | English |
 
-Adding a broker takes one small file and no change anywhere else: see [CONTRIBUTING.md](CONTRIBUTING.md#add-support-for-your-broker).
+**No parser for your broker, or only PDF statements?** Convert your data to the [generic CSV](docs/generic-csv.md): one
+documented format that works for any broker. To add native support for a broker, you need one small file and no change anywhere
+else: see [CONTRIBUTING.md](CONTRIBUTING.md#add-support-for-your-broker).
 
 ## Privacy and security
 
@@ -153,7 +156,8 @@ project's own documentation before deciding.
 ## Known limitations
 
 - **French-language exports only.** DEGIRO and Fortuneo headers are matched in French. An export in another language is
-  rejected with a clear message; supporting it means adding a parser class.
+  rejected with a clear message; supporting it means adding a parser class. Meanwhile, the [generic CSV](docs/generic-csv.md)
+  works for any broker.
 - **Euro-based.** Every amount is in euros; foreign-currency items are converted, but there is no base-currency setting.
 - **French-oriented assumptions** are constants in `app/engine.py` and not configurable yet: PEA ceiling, the 30% flat tax
   used for the latent-tax estimate, the 3% savings-account reference.
