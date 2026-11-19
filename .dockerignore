@@ -1,0 +1,13 @@
+# Keep the build context small and, above all, keep private data and credentials out of it.
+.git
+.github
+tests
+docs
+data/
+*.sqlite
+*.sqlite-*
+auth.json
+twelvedata.key
+.env
+**/__pycache__
+**/*.pyc

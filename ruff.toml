@@ -1,0 +1,16 @@
+target-version = "py311"
+line-length = 200
+
+[lint]
+# Real bugs and dead code (F), plus pycodestyle errors and warnings (E, W). Style preferences (UP, SIM, RUF...) are left out on purpose.
+select = ["E", "F", "W"]
+ignore = [
+    "E501",   # long lines are deliberate in this code base
+    "E701",   # `if x: return` on one line
+    "E702",   # `a; b` on one line
+    "E731",   # small named lambdas
+    "E741",   # short names like `l` in comprehensions
+]
+
+[lint.per-file-ignores]
+"tests/*" = ["E402"]   # tests add app/ to sys.path before importing it

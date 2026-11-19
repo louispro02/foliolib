@@ -1,0 +1,257 @@
+"""FolioLib: personal investment dashboard. `serve` (default); `passwd` creates or changes the account; `report` prints a text summary.
+
+    docker exec -it foliolib python main.py passwd     username + password (typed in the terminal)
+    docker exec foliolib python main.py report         value and positions as text
+    python main.py demo                                load synthetic demo data into an empty database
+"""
+import json
+import os
+import signal
+import sys
+import threading
+import time
+import urllib.parse
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+import auth
+import engine
+import parsers
+import store
+
+STATIC = Path(__file__).parent / "static"
+MAX_UPLOAD = 8 * 1024 * 1024
+TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".svg": "image/svg+xml", ".woff2": "font/woff2"}
+CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; "
+       "form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+job = {"running": False, "step": "", "started": 0, "done": 0, "notes": []}
+job_lock = threading.Lock()
+
+
+def log(msg):
+    print(time.strftime("%Y-%m-%d %H:%M:%S"), msg, flush=True)
+
+
+def run_refresh():
+    with job_lock:
+        if job["running"]:
+            return False
+        job.update(running=True, step="Starting", started=time.time(), notes=[])
+
+    def work():
+        try:
+            db = store.connect()
+            job["notes"] = engine.refresh(db, store.DATA, lambda s: job.update(step=s))
+        except Exception as e:                                   # a bug must not block the page
+            job["notes"] = ["internal error: " + type(e).__name__]
+            log("refresh : " + repr(e))
+        finally:
+            job.update(running=False, done=time.time(), step="")
+    threading.Thread(target=work, daemon=True).start()
+    return True
+
+
+LOGIN = """<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FolioLib</title><link rel="stylesheet" href="/static/login.css"><body class="login"><main>
+<h1>FolioLib</h1><p class="muted">%(msg)s</p>
+<form method="post" action="/login"><label>Username<input name="user" autocomplete="username" autofocus required></label>
+<label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+<button>Sign in</button></form></main></body></html>"""
+
+
+class Handler(BaseHTTPRequestHandler):
+    server_version = "foliolib"
+
+    def log_message(self, *a):
+        pass
+
+    # ----- helpers
+    def _send(self, code, body=b"", ctype="text/plain; charset=utf-8", extra=None):
+        if isinstance(body, str):
+            body = body.encode()
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Content-Security-Policy", CSP)
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "same-origin")
+        self.send_header("Cache-Control", "no-store")
+        for k, v in (extra or {}).items():
+            self.send_header(k, v)
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _json(self, obj, code=200):
+        self._send(code, json.dumps(obj, ensure_ascii=False), "application/json; charset=utf-8")
+
+    def _authed(self):
+        c = self.headers.get("Cookie", "")
+        for part in c.split(";"):
+            k, _, v = part.strip().partition("=")
+            if k == "sid" and auth.valid_cookie(v):
+                return True
+        return False
+
+    def _same_origin(self):
+        """Protection against requests coming from another site: `Sec-Fetch-Site` (sent by all recent browsers),
+        otherwise the `Origin` header must point to this same address. A SameSite=Strict cookie doubles the protection."""
+        site = self.headers.get("Sec-Fetch-Site")
+        if site is not None:
+            return site == "same-origin"
+        origin = self.headers.get("Origin", "")
+        return bool(origin) and urllib.parse.urlparse(origin).netloc == self.headers.get("Host", "")
+
+    def _redirect(self, to, extra=None):
+        self._send(303, b"", extra={"Location": to, **(extra or {})})
+
+    # ----- GET
+    def do_GET(self):
+        path = urllib.parse.urlparse(self.path).path
+        if path == "/healthz":
+            return self._send(200, "ok")
+        if path == "/static/login.css":
+            return self._file("login.css")
+        if path == "/login":
+            return self._login_page()
+        if not self._authed():
+            return self._redirect("/login") if not path.startswith("/api/") else self._json({"error": "sign-in required"}, 401)
+        if path == "/":
+            return self._file("index.html")
+        if path.startswith("/static/"):
+            return self._file(path[len("/static/"):])
+        if path == "/api/data":
+            return self._json(engine.compute(store.connect(), store.DATA))
+        if path == "/api/status":
+            return self._json({k: job[k] for k in ("running", "step", "notes")} | {"done": job.get("done", 0)})
+        self._send(404, "not found")
+
+    def _file(self, name):
+        p = (STATIC / urllib.parse.unquote(name)).resolve()
+        if STATIC.resolve() not in p.parents or not p.is_file() or p.suffix not in TYPES:
+            return self._send(404, "not found")
+        self._send(200, p.read_bytes(), TYPES[p.suffix])
+
+    def _login_page(self, msg=""):
+        if not auth.configured():
+            msg = "No account: run \"docker exec -it foliolib python main.py passwd\"."
+        self._send(200, LOGIN % {"msg": msg or "Private access."}, "text/html; charset=utf-8")
+
+    # ----- POST
+    def do_POST(self):
+        path = urllib.parse.urlparse(self.path).path
+        if not self._same_origin():
+            return self._send(403, "origin refused")
+        n = int(self.headers.get("Content-Length") or 0)
+        if n > MAX_UPLOAD:
+            return self._send(413, "file too large")
+        body = self.rfile.read(n)
+        if path == "/login":
+            return self._login(body)
+        if not self._authed():
+            return self._json({"error": "sign-in required"}, 401)
+        db = store.connect()
+        if path == "/logout":
+            return self._redirect("/login", {"Set-Cookie": "sid=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Strict"})
+        if path == "/api/refresh":
+            return self._json({"started": run_refresh()})
+        if path == "/api/upload":
+            if store.meta_get(db, "demo"):
+                return self._json({"error": "Demo data is loaded: erase it first (Data Management) before importing your own files."}, 400)
+            name = urllib.parse.unquote(self.headers.get("X-Filename", "export.csv"))[:120]
+            try:
+                kind, recs = parsers.parse(body)
+            except ValueError as e:
+                return self._json({"error": str(e)}, 400)
+            total, new = store.add_file(db, name, kind, recs, store.save_raw(body))
+            return self._json({"kind": kind, "lines": total, "new": new, "started": run_refresh()})
+        if path == "/api/alias":
+            d = json.loads(body or b"{}")
+            label, isin = " ".join(str(d.get("label", "")).lower().split()), str(d.get("isin", "")).strip().upper()
+            if not label or len(isin) != 12:
+                return self._json({"error": "Invalid ISIN (12 characters)"}, 400)
+            db.execute("INSERT OR REPLACE INTO aliases(label,isin) VALUES(?,?)", (label, isin))
+            db.commit()
+            return self._json({"ok": True, "started": run_refresh()})
+        if path == "/api/symbol":
+            d = json.loads(body or b"{}")
+            isin, sym = str(d.get("isin", "")).strip().upper(), str(d.get("symbol", "")).strip().upper()
+            if len(isin) != 12 or not sym or len(sym) > 20:
+                return self._json({"error": "Invalid ISIN or symbol"}, 400)
+            db.execute("INSERT INTO instruments(isin,symbol,manual,tried) VALUES(?,?,1,0) ON CONFLICT(isin) DO UPDATE SET symbol=?, manual=1", (isin, sym, sym))
+            db.commit()
+            return self._json({"ok": True, "started": run_refresh()})
+        if path == "/api/wipe":
+            if json.loads(body or b"{}").get("confirm") != "WIPE":
+                return self._json({"error": "confirmation missing"}, 400)
+            store.wipe(db)
+            return self._json({"ok": True})
+        self._send(404, "not found")
+
+    def _login(self, body):
+        form = urllib.parse.parse_qs(body.decode("utf-8", "replace"))
+        user, pw = (form.get("user") or [""])[0], (form.get("password") or [""])[0]
+        if auth.locked():
+            return self._send(429, LOGIN % {"msg": "Too many attempts: try again in a few minutes."}, "text/html; charset=utf-8")
+        if auth.check(user, pw):
+            return self._redirect("/", {"Set-Cookie": f"sid={auth.make_cookie()}; Max-Age={auth.SESSION_SECONDS}; Path=/; HttpOnly; Secure; SameSite=Strict"})
+        self._send(401, LOGIN % {"msg": "Incorrect username or password."}, "text/html; charset=utf-8")
+
+    def do_PUT(self):
+        self._send(405, "method not allowed")
+    do_DELETE = do_PATCH = do_PUT
+
+
+def serve():
+    store.DATA.mkdir(parents=True, exist_ok=True)
+    db = store.connect()
+    need = store.migrate(db)
+    if need:
+        log("parser fixed, re-upload needed: " + ", ".join(need))
+    db.close()
+    port = int(sys.argv[sys.argv.index("--port") + 1]) if "--port" in sys.argv else int(os.environ.get("FOLIOLIB_PORT", "8080"))
+    host = os.environ.get("FOLIOLIB_HOST", "0.0.0.0")
+    srv = ThreadingHTTPServer((host, port), Handler)
+    # As PID 1 of a container, Python ignores SIGTERM unless told otherwise: `docker stop` would wait 10 s, then kill us.
+    # shutdown() blocks until the loop exits, so it must not run in the thread that runs the loop.
+    signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=srv.shutdown, daemon=True).start())
+    log("foliolib ready on %s:%d (account configured: %s)" % (host, port, auth.configured()))
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        srv.server_close()
+        log("foliolib stopped")
+
+
+def import_file():
+    """docker exec foliolib python main.py import /data/file.csv: same path as the upload in the page."""
+    path = Path(sys.argv[2])
+    raw = path.read_bytes()
+    kind, recs = parsers.parse(raw)
+    db = store.connect()
+    total, new = store.add_file(db, path.name, kind, recs, store.save_raw(raw))
+    print(f"{path.name}: {kind}, {new} new line(s) out of {total}")
+
+
+def load_demo():
+    """python main.py demo: fill an EMPTY database with synthetic data (see demo.py)."""
+    import demo
+    store.DATA.mkdir(parents=True, exist_ok=True)
+    db = store.connect()
+    n = demo.load(db)
+    print(f"Demo data loaded into {store.DB_PATH}: {n['orders']} orders, {n['account_lines']} account lines, {n['instruments']} instruments.")
+    print("Next: `python main.py passwd` to create a login, then `python main.py serve` (add --port N to change the port).")
+
+
+def report():
+    d = engine.compute(store.connect(), store.DATA)
+    k = d["kpi"]
+    print(f"Value: {k['value']:.2f} € | Invested: {k['invested']:.2f} € | Gain: {k['gain']:+.2f} € ({(k['gain_pct'] or 0) * 100:+.1f} %) | IRR: {(k['irr'] or 0) * 100:.1f} %/yr")
+    for p in d["positions"]:
+        print(f"{p['account_short'][:8]:8} {p['name'][:34]:34} {p['value']:9.2f} € {((p['gain_pct'] or 0) * 100):+7.1f} %  [{p['source']}]")
+
+
+if __name__ == "__main__":
+    cmd = sys.argv[1] if len(sys.argv) > 1 else "serve"
+    {"serve": serve, "passwd": auth.cli_passwd, "report": report, "import": import_file, "demo": load_demo}.get(cmd, serve)()

@@ -1,0 +1,9 @@
+# Never commit runtime data or credentials
+data/
+*.sqlite
+*.sqlite-*
+auth.json
+uploads/
+.env
+__pycache__/
+*.pyc
